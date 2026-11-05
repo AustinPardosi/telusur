@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use telusur::{
     bench,
     engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
+    filter::{Filter, Filters},
     synth,
     util::Fbin,
     vector::{kernel::Kernel, kmeans},
@@ -300,8 +301,7 @@ fn vector_index(name: &str, n: usize, dims: usize) -> (Index, Vec<Vec<f32>>, Vec
     let opts = BuildOptions {
         vectors: Some(dir.join("base.fbin")),
         d_code: dims.min(256),
-        d_rerank: None,
-        nlist: None,
+        ..BuildOptions::default()
     };
     engine::build(&dir.join("corpus.jsonl"), &dir.join("index"), &opts).unwrap();
     let rows = |f: Fbin| (0..f.n).map(|i| f.row(i).to_vec()).collect::<Vec<_>>();
@@ -473,4 +473,191 @@ fn probing_every_cluster_equals_one_cluster() {
             "more clusters, more padding"
         );
     }
+}
+
+/// Doc i: group `g{i % 1000}` unless i % 13 == 0, crawl date month 1 + i % 12 (as a UTC
+/// timestamp) unless i % 17 == 0.
+fn group_of(i: usize) -> Option<usize> {
+    (!i.is_multiple_of(13)).then_some(i % 1000)
+}
+fn month_of(i: usize) -> Option<usize> {
+    (!i.is_multiple_of(17)).then_some(1 + i % 12)
+}
+
+#[test]
+fn filters_never_leak() {
+    let n = 50_000;
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("filters");
+    synth::text(&dir.join("plain.jsonl"), n, 0, 5).unwrap();
+    let queries = synth::vectors(&dir.join("base.fbin"), n, 10, 128, 5).unwrap();
+    let corpus: String = fs::read_to_string(dir.join("plain.jsonl"))
+        .unwrap()
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut d: Value = serde_json::from_str(line).unwrap();
+            if let Some(g) = group_of(i) {
+                d["group"] = json!(format!("g{g}"));
+            }
+            if let Some(m) = month_of(i) {
+                d["crawl_date"] = json!(format!("2023-{m:02}-{:02}T12:00:00Z", 1 + i % 28));
+            }
+            format!("{d}\n")
+        })
+        .collect();
+    fs::write(dir.join("corpus.jsonl"), corpus).unwrap();
+    let opts = BuildOptions {
+        vectors: Some(dir.join("base.fbin")),
+        d_code: 128,
+        keyword_fields: vec!["group".into()],
+        date_field: Some("crawl_date".into()),
+        ..BuildOptions::default()
+    };
+    engine::build(&dir.join("corpus.jsonl"), &dir.join("index"), &opts).unwrap();
+    let index = Index::open(&dir.join("index")).unwrap();
+    let qs = Fbin::open(&queries).unwrap();
+    let doc = |id: &str| id.trim_start_matches("synth-").parse::<usize>().unwrap();
+
+    // 0.1%, 1%, 10% and 50% of groups; under 20,000 docs is scored exactly, over is probed.
+    for groups in [1, 10, 100, 500] {
+        let filters: Filters = [(
+            "group".to_string(),
+            Filter::Any((0..groups).map(|g| format!("g{g}")).collect()),
+        )]
+        .into();
+        let passes = |i: usize| group_of(i).is_some_and(|g| g < groups);
+        let expected = (0..n).filter(|&i| passes(i)).count() as u64;
+        for qi in 0..qs.n {
+            let req = Request {
+                mode: Mode::Neural,
+                k: 50,
+                vector: Some(qs.row(qi).to_vec()),
+                filters: filters.clone(),
+                debug: true,
+                ..Request::default()
+            };
+            let res = index.search(&req).unwrap();
+            assert!(
+                res.results.iter().all(|h| passes(doc(&h.id))),
+                "neural, {groups} groups"
+            );
+            assert_eq!(res.results.len() as u64, expected.min(50));
+            let stats = res.stats.unwrap();
+            assert_eq!(stats.docs_allowed, Some(expected));
+            assert_eq!(
+                stats.clusters_probed == Some(0),
+                expected <= 20_000,
+                "{groups} groups: path"
+            );
+        }
+        for q in ["w1 w2 w3", "w0 w5", "w1000 w1001 w42"] {
+            let run = |strategy| {
+                let req = Request {
+                    query: q.into(),
+                    mode: Mode::Keyword,
+                    k: 100,
+                    strategy,
+                    filters: filters.clone(),
+                    ..Request::default()
+                };
+                index.search(&req).unwrap().results
+            };
+            let (e, m) = (run(Strategy::Exhaustive), run(Strategy::Maxscore));
+            assert!(
+                e.iter().chain(&m).all(|h| passes(doc(&h.id))),
+                "keyword, {groups} groups"
+            );
+            assert_eq!(e.len(), m.len());
+            for (a, b) in e.iter().zip(&m) {
+                assert!(
+                    (a.score - b.score).abs() <= 1e-5 * a.score,
+                    "{q}: {} vs {}",
+                    a.score,
+                    b.score
+                );
+            }
+        }
+    }
+
+    // A crawl date range, inclusive, and every field must hold.
+    let filters: Filters = [
+        (
+            "crawl_date".to_string(),
+            Filter::Range {
+                gte: Some("2023-03-01".into()),
+                lte: Some("2023-05-28".into()),
+            },
+        ),
+        (
+            "group".to_string(),
+            Filter::Any((0..500).map(|g| format!("g{g}")).collect()),
+        ),
+    ]
+    .into();
+    let passes = |i: usize| {
+        month_of(i).is_some_and(|m| (3..=5).contains(&m)) && group_of(i).is_some_and(|g| g < 500)
+    };
+    let req = Request {
+        query: "w1 w2".into(),
+        mode: Mode::Keyword,
+        k: 1000,
+        filters: filters.clone(),
+        debug: true,
+        ..Request::default()
+    };
+    let res = index.search(&req).unwrap();
+    assert!(!res.results.is_empty() && res.results.iter().all(|h| passes(doc(&h.id))));
+    assert_eq!(
+        res.stats.unwrap().docs_allowed,
+        Some((0..n).filter(|&i| passes(i)).count() as u64)
+    );
+
+    // Bad requests and bad corpora fail clearly.
+    let bad = |filters: Filters| {
+        index.search(&Request {
+            query: "w1".into(),
+            mode: Mode::Keyword,
+            filters,
+            ..Request::default()
+        })
+    };
+    assert!(
+        bad([("lang".into(), Filter::Any(vec!["en".into()]))].into()).is_err(),
+        "undeclared field"
+    );
+    assert!(
+        bad([(
+            "group".into(),
+            Filter::Range {
+                gte: None,
+                lte: None
+            }
+        )]
+        .into())
+        .is_err(),
+        "range on a keyword field"
+    );
+    assert!(
+        bad([(
+            "crawl_date".into(),
+            Filter::Range {
+                gte: Some("2023-3-1".into()),
+                lte: None
+            }
+        )]
+        .into())
+        .is_err(),
+        "bad date"
+    );
+    fs::write(
+        dir.join("numeric.jsonl"),
+        "{\"id\":\"a\",\"text\":\"x\",\"group\":3}\n",
+    )
+    .unwrap();
+    let opts = BuildOptions {
+        keyword_fields: vec!["group".into()],
+        ..BuildOptions::default()
+    };
+    let err = engine::build(&dir.join("numeric.jsonl"), &dir.join("numeric"), &opts).unwrap_err();
+    assert!(format!("{err:#}").contains("no numeric filters"), "{err:#}");
 }

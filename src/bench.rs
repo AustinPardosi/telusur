@@ -277,7 +277,7 @@ pub fn ann(
     let mut runs = Vec::new();
     for &nprobe in nprobes {
         for &depth in depths {
-            let search = |q: &[f32]| index.search(q, K, depth, nprobe, kernel);
+            let search = |q: &[f32]| index.search(q, K, depth, nprobe, kernel, None);
             let (mut recall_full, mut recall_rerank, mut scanned) = (0.0, 0.0, 0.0);
             for (i, q) in qs.iter().enumerate() {
                 let (hits, trace) = search(q)?;

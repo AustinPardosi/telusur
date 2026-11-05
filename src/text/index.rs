@@ -23,6 +23,7 @@ use super::{
 use crate::util::{TopK, mmap};
 use anyhow::Result;
 use memmap2::Mmap;
+use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -374,7 +375,14 @@ impl KeywordIndex {
     /// Top k (doc, score) by BM25, best first, ties to the smaller doc id, plus the number
     /// of postings decoded. The strategies add a doc's per-term scores in different orders,
     /// so their top-k scores agree within float rounding, not bit for bit.
-    pub fn search(&self, query: &str, k: usize, strategy: Strategy) -> (Vec<(u32, f32)>, u64) {
+    /// Only docs in `allowed` (when given) can be returned.
+    pub fn search(
+        &self,
+        query: &str,
+        k: usize,
+        strategy: Strategy,
+        allowed: Option<&RoaringBitmap>,
+    ) -> (Vec<(u32, f32)>, u64) {
         let terms = self.query_terms(query);
         let mut cursors = Vec::new();
         let mut decoded = 0;
@@ -392,12 +400,14 @@ impl KeywordIndex {
                     }
                 }
                 for (doc, s) in (0..).zip(acc) {
-                    if s > 0.0 {
+                    if s > 0.0 && allowed.is_none_or(|a| a.contains(doc)) {
                         top.push(doc, s);
                     }
                 }
             }
-            Strategy::Maxscore => self.maxscore(&mut cursors, terms.len(), &mut top, &mut decoded),
+            Strategy::Maxscore => {
+                self.maxscore(&mut cursors, terms.len(), allowed, &mut top, &mut decoded)
+            }
         }
         (top.into_sorted(), decoded)
     }
@@ -512,7 +522,14 @@ impl KeywordIndex {
     /// small array, then each doc they found, in doc order, probes the non-essential cursors
     /// (with skips) only while it could still make the top k. Docs found by non-essential
     /// cursors alone are never scored.
-    fn maxscore(&self, cursors: &mut [Cursor], n_terms: usize, top: &mut TopK, decoded: &mut u64) {
+    fn maxscore(
+        &self,
+        cursors: &mut [Cursor],
+        n_terms: usize,
+        allowed: Option<&RoaringBitmap>,
+        top: &mut TopK,
+        decoded: &mut u64,
+    ) {
         const WINDOW: usize = 4096;
         cursors.sort_by(|a, b| a.bound.total_cmp(&b.bound));
         // prefix[i]: the most cursors 0..=i can add to one doc. A doc sits in one tier per
@@ -560,6 +577,9 @@ impl KeywordIndex {
                     let doc = lo + i as u32;
                     let mut score = std::mem::take(&mut scores[i]);
                     let mut hit = std::mem::take(&mut hits[i]);
+                    if allowed.is_some_and(|a| !a.contains(doc)) {
+                        continue; // filtered out before it can probe or raise theta
+                    }
                     let theta = top.threshold();
                     let mut possible = true;
                     for (j, c) in lower.iter_mut().enumerate().rev() {

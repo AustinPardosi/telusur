@@ -2,6 +2,7 @@
 
 use crate::{
     docstore::{self, DocStore},
+    filter::{self, FilterIndex},
     text::index::{self as keyword, KeywordIndex},
     util::Fbin,
     vector::{
@@ -56,6 +57,8 @@ pub struct Request {
     pub kernel: Option<Kernel>,
     /// Clusters neural search probes [default: 256, from B3; at most all of them].
     pub nprobe: Option<usize>,
+    /// Every entry must hold; both retrievers apply them.
+    pub filters: filter::Filters,
 }
 
 impl Default for Request {
@@ -70,6 +73,7 @@ impl Default for Request {
             rerank_depth: 500,
             kernel: None,
             nprobe: None,
+            filters: filter::Filters::new(),
         }
     }
 }
@@ -96,6 +100,9 @@ pub struct Stats {
     pub clusters_probed: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codes_scanned: Option<usize>,
+    /// Docs that pass the filters, when there are any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_allowed: Option<u64>,
 }
 
 /// One result. `id` is the external id; doc ids never leave the engine.
@@ -134,6 +141,10 @@ pub struct BuildOptions {
     pub d_rerank: Option<usize>,
     /// Clusters; defaults to about 2 x sqrt(docs), rounded to a power of two.
     pub nlist: Option<usize>,
+    /// Corpus fields to filter on by value (a string or a list of strings per doc).
+    pub keyword_fields: Vec<String>,
+    /// The corpus field holding the crawl date (`YYYY-MM-DD` or a UTC timestamp).
+    pub date_field: Option<String>,
 }
 
 impl Default for BuildOptions {
@@ -143,6 +154,8 @@ impl Default for BuildOptions {
             d_code: 256,
             d_rerank: None,
             nlist: None,
+            keyword_fields: Vec::new(),
+            date_field: None,
         }
     }
 }
@@ -157,6 +170,9 @@ struct CorpusDoc {
     text: String,
     #[serde(default)]
     url: String,
+    /// Everything else, where filter fields come from.
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Builds an index in `out` from `corpus` (one JSON doc per line, line order = doc id, which
@@ -177,14 +193,23 @@ pub fn build_with(
     let file = File::open(corpus).with_context(|| format!("open {}", corpus.display()))?;
     let mut keyword = keyword::Builder::default();
     let mut docs = docstore::Writer::create(out)?;
+    let mut filters = (!opts.keyword_fields.is_empty() || opts.date_field.is_some())
+        .then(|| filter::Builder::new(&opts.keyword_fields, opts.date_field.as_deref()))
+        .transpose()?;
     let mut n = 0;
     for line in BufReader::new(file).lines() {
-        let d: CorpusDoc = serde_json::from_str(&line?)
-            .with_context(|| format!("{} line {}", corpus.display(), n + 1))?;
+        let at = || format!("{} line {}", corpus.display(), n + 1);
+        let d: CorpusDoc = serde_json::from_str(&line?).with_context(at)?;
         // Title and text are indexed as one field, like Anserini's BEIR flat indexes.
         keyword.add(&format!("{}\n{}", d.title, d.text));
         docs.add([&d.id, &d.title, &d.url, docstore::snippet(&d.text)])?;
+        if let Some(f) = &mut filters {
+            f.add(n as u32, &d.rest).with_context(at)?;
+        }
         n += 1;
+    }
+    if let Some(f) = filters {
+        f.finish(out)?;
     }
     if let Some(v) = &vectors {
         // Every doc has a vector, or none do.
@@ -206,6 +231,7 @@ pub struct Index {
     keyword: KeywordIndex,
     docs: DocStore,
     vectors: Option<VectorIndex>,
+    filters: FilterIndex,
 }
 
 impl Index {
@@ -214,6 +240,7 @@ impl Index {
             keyword: KeywordIndex::open(dir)?,
             docs: DocStore::open(dir)?,
             vectors: VectorIndex::open(dir)?,
+            filters: FilterIndex::open(dir)?,
         })
     }
 
@@ -242,11 +269,14 @@ impl Index {
 
         let mut timings = Timings::default();
         let mut stats = Stats::default();
+        let allowed = self.filters.allowed(&req.filters)?;
+        stats.docs_allowed = allowed.as_ref().map(|a| a.len());
         let hits = match neural {
             Some((index, q)) => {
                 let kernel = req.kernel.map_or_else(Kernel::default_for_process, Ok)?;
                 let nprobe = req.nprobe.unwrap_or(ivf::DEFAULT_NPROBE);
-                let (hits, t) = index.search(q, req.k, req.rerank_depth, nprobe, kernel)?;
+                let (hits, t) =
+                    index.search(q, req.k, req.rerank_depth, nprobe, kernel, allowed.as_ref())?;
                 stats.kernel = Some(kernel);
                 stats.clusters_probed = Some(t.clusters_probed);
                 stats.codes_scanned = Some(t.codes_scanned);
@@ -256,7 +286,9 @@ impl Index {
             }
             None => {
                 let t = Instant::now();
-                let (hits, decoded) = self.keyword.search(&req.query, req.k, req.strategy);
+                let (hits, decoded) =
+                    self.keyword
+                        .search(&req.query, req.k, req.strategy, allowed.as_ref());
                 timings.keyword = Some(ms(t));
                 stats.postings_decoded = Some(decoded);
                 hits

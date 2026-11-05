@@ -17,6 +17,7 @@ use anyhow::{Result, ensure};
 use half::f16;
 use memmap2::Mmap;
 use rand::{SeedableRng, rngs::StdRng, seq::index::sample};
+use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -30,6 +31,8 @@ const PADDING: u32 = u32::MAX;
 /// 0.95 against rerank ground truth on DBpedia 1M (B3, bench-results/b3-ann-dbpedia-*), which
 /// it does at the default rerank depth of 500.
 pub const DEFAULT_NPROBE: usize = 256;
+/// A filter allowing at most this many docs skips the clusters and scores them all exactly.
+pub const EXACT_FILTER_MAX: u64 = 20_000;
 /// k-means trains on this many sample points per cluster, for this many rounds.
 const SAMPLE_PER_CLUSTER: usize = 64;
 const ITERS: usize = 12;
@@ -179,6 +182,11 @@ impl VectorIndex {
     /// first so the threshold rises early, keeping the `rerank_depth` best (at least k).
     /// Rerank: score those exactly with rerank vectors. A rerank depth of 0 skips the rerank
     /// and returns code scores. Ties go to the smaller doc id.
+    ///
+    /// With `allowed` (a filter's docs), only those docs can be returned. If there are at most
+    /// `EXACT_FILTER_MAX`, they are all scored exactly with rerank vectors and nothing is
+    /// probed. Otherwise the probe widens to `nprobe / selectivity` clusters (at most all of
+    /// them) and disallowed docs are dropped before the candidate heap.
     pub fn search(
         &self,
         query: &[f32],
@@ -186,6 +194,7 @@ impl VectorIndex {
         rerank_depth: usize,
         nprobe: usize,
         kernel: Kernel,
+        allowed: Option<&RoaringBitmap>,
     ) -> Result<(Vec<(u32, f32)>, Trace)> {
         let Meta {
             dims,
@@ -199,6 +208,34 @@ impl VectorIndex {
             query.len()
         );
         ensure!(nprobe >= 1, "probe at least one cluster");
+        let rerank = self.rerank.as_slice();
+        let rerank_row = |doc: u32| &rerank[doc as usize * d_rerank..][..d_rerank];
+
+        if let Some(allowed) = allowed
+            && allowed.len() <= EXACT_FILTER_MAX
+        {
+            let t = Instant::now();
+            let q = truncate_normalize(query, d_rerank);
+            let mut top = TopK::new(k);
+            for doc in allowed {
+                top.push(doc, dot_f16(rerank_row(doc), &q));
+            }
+            let trace = Trace {
+                route: 0.0,
+                scan: 0.0,
+                rerank: ms(t),
+                clusters_probed: 0,
+                codes_scanned: 0,
+            };
+            return Ok((top.into_sorted(), trace));
+        }
+        let nprobe = match allowed {
+            Some(a) => {
+                let docs = (rerank.len() / d_rerank) as f64;
+                (nprobe as f64 * docs / a.len() as f64).ceil() as usize
+            }
+            None => nprobe,
+        };
 
         let t = Instant::now();
         let q = truncate_normalize(query, d_code);
@@ -235,7 +272,7 @@ impl VectorIndex {
             codes_scanned += to - from;
             for (&doc, &s) in ids[from..to].iter().zip(&scores) {
                 // Cheap compare first; ties may still get in on doc id, so TopK has the last word.
-                if s < min_accept || doc == PADDING {
+                if s < min_accept || doc == PADDING || allowed.is_some_and(|a| !a.contains(doc)) {
                     continue;
                 }
                 candidates.push(doc, f32::from(s));
@@ -249,11 +286,9 @@ impl VectorIndex {
             candidates.into_sorted()
         } else {
             let q = truncate_normalize(query, d_rerank);
-            let rerank = self.rerank.as_slice();
             let mut top = TopK::new(k);
             for (doc, _) in candidates.into_sorted() {
-                let at = doc as usize * d_rerank;
-                top.push(doc, dot_f16(&rerank[at..at + d_rerank], &q));
+                top.push(doc, dot_f16(rerank_row(doc), &q));
             }
             top.into_sorted()
         };

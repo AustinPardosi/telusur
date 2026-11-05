@@ -4,7 +4,9 @@ use std::{path::PathBuf, time::Instant};
 use telusur::{
     bench,
     engine::{self, BuildOptions, Index, Mode, Request, Strategy},
-    eval, synth,
+    eval,
+    filter::{Filter, Filters},
+    synth,
     util::{Fbin, read_ibin, write_ibin},
     vector::{kernel::Kernel, kmeans},
 };
@@ -40,6 +42,12 @@ enum Cmd {
         /// Clusters [default: about 2 x sqrt(docs), rounded to a power of two]
         #[arg(long)]
         nlist: Option<usize>,
+        /// Corpus fields to filter on by value, e.g. domain
+        #[arg(long, value_delimiter = ',')]
+        keyword_fields: Vec<String>,
+        /// Corpus field holding the crawl date (YYYY-MM-DD or a UTC timestamp)
+        #[arg(long)]
+        date_field: Option<String>,
     },
     /// Exact ground truth: the top k base rows per query by full vectors (gt_full.ibin) and
     /// by rerank vectors (gt_rerank.ibin)
@@ -89,6 +97,10 @@ enum Cmd {
         /// Debug option: how keyword search scores
         #[arg(long, value_enum, default_value_t)]
         strategy: Strategy,
+        /// Repeatable: field=a,b (any of the values) or crawl_date=2023-01-01..2025-12-31
+        /// (inclusive, either end may be left open)
+        #[arg(long = "filter", value_parser = parse_filter)]
+        filters: Vec<(String, Filter)>,
     },
     /// Measure retrieval quality and print a JSON report
     #[command(subcommand)]
@@ -219,6 +231,8 @@ fn main() -> Result<()> {
             d_code,
             d_rerank,
             nlist,
+            keyword_fields,
+            date_field,
         } => {
             let start = Instant::now();
             let opts = BuildOptions {
@@ -226,6 +240,8 @@ fn main() -> Result<()> {
                 d_code,
                 d_rerank,
                 nlist,
+                keyword_fields,
+                date_field,
             };
             let n = engine::build(&corpus, &out, &opts)?;
             println!(
@@ -271,6 +287,7 @@ fn main() -> Result<()> {
             mode,
             debug,
             strategy,
+            filters,
         } => {
             let vector = query_vectors
                 .map(|p| -> anyhow::Result<Vec<f32>> {
@@ -289,6 +306,7 @@ fn main() -> Result<()> {
                 rerank_depth,
                 kernel,
                 nprobe,
+                filters: filters.into_iter().collect::<Filters>(),
             };
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);
@@ -362,4 +380,17 @@ fn memory_report(dir: &std::path::Path, docs: usize) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `field=a,b` is any of the values; `field=from..to` is an inclusive range, either end open.
+fn parse_filter(s: &str) -> Result<(String, Filter), String> {
+    let (field, value) = s.split_once('=').ok_or("expected field=value")?;
+    let filter = match value.split_once("..") {
+        Some((from, to)) => Filter::Range {
+            gte: (!from.is_empty()).then(|| from.to_string()),
+            lte: (!to.is_empty()).then(|| to.to_string()),
+        },
+        None => Filter::Any(value.split(',').map(String::from).collect()),
+    };
+    Ok((field.to_string(), filter))
 }
