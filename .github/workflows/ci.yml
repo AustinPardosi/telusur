@@ -2,6 +2,12 @@ name: CI
 
 on: [push, pull_request]
 
+# Override .cargo/config.toml's target-cpu=native: rust-cache restores artifacts built on one
+# runner's CPU onto another, and native proc macros then crash rustc with SIGILL. Kernels pick
+# their instruction set at runtime, so CI loses no coverage.
+env:
+  RUSTFLAGS: ""
+
 jobs:
   check:
     strategy:

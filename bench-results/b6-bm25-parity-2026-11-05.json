@@ -1,0 +1,38 @@
+[
+  {
+    "dataset": "scifact",
+    "mode": "keyword",
+    "queries": 300,
+    "ndcg_at_10": 0.6789094274508306,
+    "recall_at_100": 0.9253333333333335,
+    "seconds": 0.118182042,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "nfcorpus",
+    "mode": "keyword",
+    "queries": 323,
+    "ndcg_at_10": 0.32052581496512844,
+    "recall_at_100": 0.24567990783971755,
+    "seconds": 0.055236958,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "fiqa",
+    "mode": "keyword",
+    "queries": 648,
+    "ndcg_at_10": 0.23606680758493992,
+    "recall_at_100": 0.5394860497869755,
+    "seconds": 0.633126666,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "trec-covid",
+    "mode": "keyword",
+    "queries": 50,
+    "ndcg_at_10": 0.5934527405540646,
+    "recall_at_100": 0.10913757917307082,
+    "seconds": 0.371118334,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  }
+]

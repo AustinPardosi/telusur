@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::{path::PathBuf, time::Instant};
 use telusur::{
     engine::{self, Index, Mode, Request},
-    synth,
+    eval, synth,
 };
 
 #[derive(Parser)]
@@ -35,6 +35,24 @@ enum Cmd {
         k: usize,
         #[arg(long, value_enum, default_value_t)]
         mode: Mode,
+    },
+    /// Measure retrieval quality and print a JSON report
+    #[command(subcommand)]
+    Eval(Eval),
+}
+
+#[derive(Subcommand)]
+enum Eval {
+    /// nDCG@10 and Recall@100 on a BEIR test set, the way Anserini's regressions measure them
+    Beir {
+        /// Directory with corpus.jsonl, queries.jsonl and qrels/test.tsv
+        #[arg(long)]
+        data: PathBuf,
+        #[arg(long)]
+        index: PathBuf,
+        /// Also write the run in TREC format, for checking with trec_eval
+        #[arg(long)]
+        run: Option<PathBuf>,
     },
 }
 
@@ -85,6 +103,10 @@ fn main() -> Result<()> {
         } => {
             let res = Index::open(&index)?.search(&Request { query, mode, k })?;
             println!("{}", serde_json::to_string_pretty(&res)?);
+        }
+        Cmd::Eval(Eval::Beir { data, index, run }) => {
+            let report = eval::beir(&Index::open(&index)?, &data, run.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }
     Ok(())

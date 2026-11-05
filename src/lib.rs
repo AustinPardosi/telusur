@@ -1,5 +1,6 @@
 pub mod docstore;
 pub mod engine;
+pub mod eval;
 pub mod synth;
 pub mod util;
 
