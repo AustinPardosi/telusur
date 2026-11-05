@@ -1,0 +1,17 @@
+[package]
+name = "telusur-tantivy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "B9: the same corpora and queries as telusur's B7, indexed and searched with Tantivy"
+
+# Its own workspace, so telusur's build never pulls in Tantivy.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tantivy = "0.27.0"
+telusur = { path = "../.." }
