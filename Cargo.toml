@@ -1,0 +1,10 @@
+[package]
+name = "telusur"
+version = "0.1.0"
+edition = "2024"
+description = "Hybrid search engine in Rust: binary Matryoshka vectors with SIMD lookup tables + compressed BM25"
+license = "MIT"
+repository = "https://github.com/AustinPardosi/telusur"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
