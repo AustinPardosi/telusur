@@ -126,6 +126,27 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum Bench {
+    /// B5 for neural and hybrid search: the same filters as keyword-filters, recall against
+    /// exact search within each filter
+    HybridFilters {
+        #[arg(long)]
+        index: PathBuf,
+        /// The vectors the index was built from
+        #[arg(long)]
+        base: PathBuf,
+        /// One JSON object per line, query text in --field
+        #[arg(long)]
+        queries: PathBuf,
+        #[arg(long, default_value = "text")]
+        field: String,
+        /// Row i is the vector of query i
+        #[arg(long)]
+        query_vectors: PathBuf,
+        #[arg(long, default_value = "domain")]
+        domain_field: String,
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+    },
     /// B5 for keyword search: domain and crawl date filters at 0.1% to 50% selectivity
     KeywordFilters {
         #[arg(long)]
@@ -438,6 +459,20 @@ fn main() -> Result<()> {
                 query_vectors.as_deref(),
                 run.as_deref(),
             )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::HybridFilters {
+            index,
+            base,
+            queries,
+            field,
+            query_vectors,
+            domain_field,
+            k,
+        }) => {
+            let (base, vectors) = (Fbin::open(&base)?, Fbin::open(&query_vectors)?);
+            let report =
+                bench::hybrid_filters(&index, &base, &queries, &field, &vectors, &domain_field, k)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Bench(Bench::KeywordFilters {

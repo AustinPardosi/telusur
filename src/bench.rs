@@ -16,7 +16,13 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, path::Path, thread, time::Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::Path,
+    thread,
+    time::Instant,
+};
 
 /// Latency is measured over at least this many queries, cycling through the query set.
 const MIN_TIMED: usize = 1000;
@@ -770,22 +776,14 @@ pub struct KeywordFilterRun {
     pub mean_ms: f64,
 }
 
-/// B5 for keyword search on the index in `dir`: lists of the biggest domains (values of
-/// `domain_field`) and ranges of the most recent crawl days, each grown until it allows about
-/// 0.1%, 1%, 10% or 50% of the docs (domains only to 1%: past that a list is thousands of
-/// domains), searched with the test queries of the BEIR dataset in `data`.
-pub fn keyword_filters(
-    dir: &Path,
-    data: &Path,
+/// Filters on web data, each with a label: none, lists of the biggest domains (values of
+/// `domain_field`) holding about 0.1% and 1% of the `n` docs (past that a list is thousands of
+/// domains), and runs of consecutive crawl days closest to 0.1%, 1%, 10% and 50%.
+fn web_filter_specs(
+    filter_index: &FilterIndex,
+    n: usize,
     domain_field: &str,
-    k: usize,
-) -> Result<KeywordFilterReport> {
-    let index = Index::open(dir)?;
-    let filter_index = FilterIndex::open(dir)?;
-    let n = index.docs();
-    let (_, queries) = load_beir(data)?;
-    let texts: Vec<&str> = queries.values().map(String::as_str).collect();
-
+) -> Result<Vec<(String, Filters)>> {
     // The shortest prefix of `counts` holding at least `share` of the docs.
     let prefix = |counts: &[(String, u64)], share: f64| {
         let mut sum = 0;
@@ -840,6 +838,26 @@ pub fn keyword_filters(
             specs.push((label, [(date.to_string(), range)].into()));
         }
     }
+    Ok(specs)
+}
+
+/// B5 for keyword search on the index in `dir`: lists of the biggest domains (values of
+/// `domain_field`) and ranges of the most recent crawl days, each grown until it allows about
+/// 0.1%, 1%, 10% or 50% of the docs (domains only to 1%: past that a list is thousands of
+/// domains), searched with the test queries of the BEIR dataset in `data`.
+pub fn keyword_filters(
+    dir: &Path,
+    data: &Path,
+    domain_field: &str,
+    k: usize,
+) -> Result<KeywordFilterReport> {
+    let index = Index::open(dir)?;
+    let filter_index = FilterIndex::open(dir)?;
+    let n = index.docs();
+    let (_, queries) = load_beir(data)?;
+    let texts: Vec<&str> = queries.values().map(String::as_str).collect();
+
+    let specs = web_filter_specs(&filter_index, n, domain_field)?;
 
     let timed = texts.len() * MIN_TIMED.div_ceil(texts.len());
     let search = |q: &str, strategy, filters: &Filters| {
@@ -897,6 +915,180 @@ pub fn keyword_filters(
         queries_from: data.display().to_string(),
         queries: texts.len(),
         k,
+        machine: hardware(),
+        runs,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HybridFilterReport {
+    pub bench: &'static str,
+    pub index: String,
+    pub docs: usize,
+    pub queries: usize,
+    pub k: usize,
+    pub nprobe: usize,
+    pub rerank_depth: usize,
+    pub machine: String,
+    pub runs: Vec<HybridFilterRun>,
+}
+
+#[derive(Serialize)]
+pub struct HybridFilterRun {
+    pub filter: String,
+    /// Share of docs the filter allows; 1.0 is no filter.
+    pub selectivity: f64,
+    pub docs_allowed: u64,
+    /// Against the exact top k among the allowed docs, by cosine at the rerank dims.
+    pub neural_recall: f64,
+    /// Against RRF over exhaustive keyword search and exact neural search, both filtered.
+    pub hybrid_recall: f64,
+    /// Whole searches (filter lookup included), one thread; hybrid runs its two retrievers
+    /// in parallel.
+    pub neural_p50_ms: f64,
+    pub neural_p99_ms: f64,
+    pub hybrid_p50_ms: f64,
+    pub hybrid_p99_ms: f64,
+    /// Results outside the filter, over every query of both modes (must be 0).
+    pub leaked: usize,
+}
+
+/// B5 for neural and hybrid search on the index in `dir` (built from `base`), with the filters
+/// of `web_filter_specs`. Query text is field `field` of each line of `queries`, and its vector
+/// the same row of `vectors`.
+pub fn hybrid_filters(
+    dir: &Path,
+    base: &Fbin,
+    queries: &Path,
+    field: &str,
+    vectors: &Fbin,
+    domain_field: &str,
+    k: usize,
+) -> Result<HybridFilterReport> {
+    let index = Index::open(dir)?;
+    let filter_index = FilterIndex::open(dir)?;
+    let n = index.docs();
+    ensure!(
+        base.n == n,
+        "the index has {n} docs but the base has {} rows",
+        base.n
+    );
+    let texts: Vec<String> = fs::read_to_string(queries)?
+        .lines()
+        .map(|l| -> Result<String> {
+            let v: Value = serde_json::from_str(l)?;
+            Ok(v[field]
+                .as_str()
+                .context("a query has no text")?
+                .to_string())
+        })
+        .collect::<Result<_>>()?;
+    ensure!(
+        texts.len() == vectors.n,
+        "{} queries but {} vectors",
+        texts.len(),
+        vectors.n
+    );
+    let doc_of: HashMap<String, u32> = (0..n as u32)
+        .map(|d| Ok((index.external_id(d)?.to_string(), d)))
+        .collect::<Result<_>>()?;
+    let d_rerank = base.d.min(1024);
+    let q_flat: Vec<f32> = (0..vectors.n)
+        .flat_map(|i| truncate_normalize(vectors.row(i), d_rerank))
+        .collect();
+    let depth = k.max(engine::FUSE_DEPTH);
+    let timed = texts.len() * MIN_TIMED.div_ceil(texts.len().max(1));
+
+    let mut runs = Vec::new();
+    for (filter, filters) in web_filter_specs(&filter_index, n, domain_field)? {
+        let allowed = filter_index.allowed(&filters)?;
+        let ids: Vec<u32> = match &allowed {
+            Some(a) => a.iter().collect(),
+            None => (0..n as u32).collect(),
+        };
+        let exact: Vec<Vec<u32>> = exact_topk(
+            ids.len(),
+            d_rerank,
+            |j| truncate_normalize(base.row(ids[j] as usize), d_rerank),
+            &q_flat,
+            depth,
+        )
+        .into_iter()
+        .map(|t| t.into_iter().map(|j| ids[j as usize]).collect())
+        .collect();
+        let search = |i: usize, mode, strategy| {
+            index.search(&Request {
+                query: texts[i].clone(),
+                mode,
+                k,
+                strategy,
+                vector: Some(vectors.row(i).to_vec()),
+                filters: filters.clone(),
+                ..Request::default()
+            })
+        };
+        let docs = |r: &Response| -> Vec<u32> { r.results.iter().map(|h| doc_of[&h.id]).collect() };
+        let passes = |d: u32| allowed.as_ref().is_none_or(|a| a.contains(d));
+
+        // Recall pass, which is also the warm-up.
+        let (mut neural_found, mut hybrid_found, mut leaked) = (0, 0, 0);
+        for i in 0..texts.len() {
+            let neural = docs(&search(i, Mode::Neural, Strategy::Maxscore)?);
+            let hybrid = docs(&search(i, Mode::Hybrid, Strategy::Maxscore)?);
+            leaked += neural
+                .iter()
+                .chain(&hybrid)
+                .filter(|&&d| !passes(d))
+                .count();
+            let truth = &exact[i][..k.min(exact[i].len())];
+            neural_found += neural.iter().filter(|d| truth.contains(d)).count();
+            let keyword = index.search(&Request {
+                query: texts[i].clone(),
+                mode: Mode::Keyword,
+                k: depth,
+                strategy: Strategy::Exhaustive,
+                filters: filters.clone(),
+                ..Request::default()
+            })?;
+            let kw: Vec<(u32, f32)> = docs(&keyword).into_iter().map(|d| (d, 0.0)).collect();
+            let nn: Vec<(u32, f32)> = exact[i].iter().map(|&d| (d, 0.0)).collect();
+            let fused: Vec<u32> = engine::rrf(&kw, &nn, k).into_iter().map(|f| f.0).collect();
+            hybrid_found += hybrid.iter().filter(|d| fused.contains(d)).count();
+        }
+        let latency = |mode| -> Result<[f64; 2]> {
+            let mut lat = Vec::with_capacity(timed);
+            for i in (0..texts.len()).cycle().take(timed) {
+                let start = Instant::now();
+                search(i, mode, Strategy::Maxscore)?;
+                lat.push(start.elapsed().as_secs_f64() * 1e3);
+            }
+            lat.sort_by(f64::total_cmp);
+            Ok([percentile(&lat, 50.0), percentile(&lat, 99.0)])
+        };
+        let [neural_p50_ms, neural_p99_ms] = latency(Mode::Neural)?;
+        let [hybrid_p50_ms, hybrid_p99_ms] = latency(Mode::Hybrid)?;
+        let wanted = (texts.len() * k.min(ids.len())).max(1) as f64;
+        runs.push(HybridFilterRun {
+            filter,
+            selectivity: ids.len() as f64 / n as f64,
+            docs_allowed: ids.len() as u64,
+            neural_recall: neural_found as f64 / wanted,
+            hybrid_recall: hybrid_found as f64 / wanted,
+            neural_p50_ms,
+            neural_p99_ms,
+            hybrid_p50_ms,
+            hybrid_p99_ms,
+            leaked,
+        });
+    }
+    Ok(HybridFilterReport {
+        bench: "hybrid-filters",
+        index: dir.display().to_string(),
+        docs: n,
+        queries: texts.len(),
+        k,
+        nprobe: ivf::DEFAULT_NPROBE,
+        rerank_depth: Request::default().rerank_depth,
         machine: hardware(),
         runs,
     })

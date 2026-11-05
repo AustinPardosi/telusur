@@ -294,6 +294,11 @@ impl Index {
         self.docs.count()
     }
 
+    /// The external id of `doc`.
+    pub fn external_id(&self, doc: u32) -> Result<&str> {
+        Ok(self.docs.get(doc)?[0])
+    }
+
     /// Dims of the full vectors the index was built from, if it has vectors.
     pub fn vector_dims(&self) -> Option<usize> {
         self.vectors.as_ref().map(VectorIndex::dims)
