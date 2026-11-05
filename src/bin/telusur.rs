@@ -6,7 +6,7 @@ use telusur::{
     engine::{self, BuildOptions, Index, Mode, Request, Strategy},
     eval,
     filter::{Filter, Filters},
-    synth,
+    server, synth,
     util::{Fbin, read_ibin, write_ibin},
     vector::{kernel::Kernel, kmeans},
 };
@@ -102,6 +102,17 @@ enum Cmd {
         #[arg(long = "filter", value_parser = parse_filter)]
         filters: Vec<(String, Filter)>,
     },
+    /// Serve an index over HTTP: POST /search, GET /health, GET /stats
+    Serve {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        addr: String,
+        /// Embedder sidecar URL (scripts/embed_server.py); without it, neural search needs a
+        /// vector in the request
+        #[arg(long)]
+        embedder: Option<String>,
+    },
     /// Measure retrieval quality and print a JSON report
     #[command(subcommand)]
     Eval(Eval),
@@ -112,6 +123,30 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum Bench {
+    /// B12: HTTP latency per mode, with the server's per-stage split, against a running serve
+    Http {
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        url: String,
+        /// One JSON object per line
+        #[arg(long)]
+        queries: PathBuf,
+        /// The field of each line that holds the query text
+        #[arg(long, default_value = "text")]
+        field: String,
+        /// Send row i as the vector of query i (neural and hybrid); without it the server
+        /// embeds the query text
+        #[arg(long)]
+        query_vectors: Option<PathBuf>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            default_value = "keyword,neural,hybrid"
+        )]
+        modes: Vec<Mode>,
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+    },
     /// B7: exhaustive vs MaxScore keyword search on a BEIR test set
     Bm25 {
         /// Directory with queries.jsonl and qrels/test.tsv
@@ -348,6 +383,11 @@ fn main() -> Result<()> {
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);
         }
+        Cmd::Serve {
+            index,
+            addr,
+            embedder,
+        } => tokio::runtime::Runtime::new()?.block_on(server::serve(&index, &addr, embedder))?,
         Cmd::Eval(Eval::Beir {
             data,
             index,
@@ -360,6 +400,18 @@ fn main() -> Result<()> {
                 query_vectors.as_deref(),
                 run.as_deref(),
             )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::Http {
+            url,
+            queries,
+            field,
+            query_vectors,
+            modes,
+            k,
+        }) => {
+            let vectors = query_vectors.as_deref().map(Fbin::open).transpose()?;
+            let report = bench::http(&url, &queries, &field, vectors.as_ref(), &modes, k)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Bench(Bench::Bm25 {

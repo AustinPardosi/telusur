@@ -177,6 +177,10 @@ impl VectorIndex {
         self.meta.nlist
     }
 
+    pub fn dims(&self) -> usize {
+        self.meta.dims
+    }
+
     /// Top k (doc, score) for a full query vector. Route: the `nprobe` clusters whose
     /// centroids best match the query. Scan: score their codes with `kernel`, best cluster
     /// first so the threshold rises early, keeping the `rerank_depth` best (at least k).

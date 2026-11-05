@@ -51,6 +51,14 @@ def write_fbin(path: Path, rows) -> None:
         f.write(rows.astype("<f4").tobytes())
 
 
+def layer_norm(rows):
+    """nomic's Matryoshka step before truncating; the index truncates and normalizes after."""
+    import numpy as np
+
+    mean = rows.mean(axis=1, keepdims=True)
+    return (rows - mean) / np.sqrt(rows.var(axis=1, keepdims=True) + 1e-5)
+
+
 def embed(out: Path, model_name: str, limit: int | None) -> None:
     import numpy as np
     from fastembed import TextEmbedding
@@ -73,10 +81,8 @@ def embed(out: Path, model_name: str, limit: int | None) -> None:
                 print(f"  {i}/{len(texts)} {what}, {time.time() - start:.0f}s", flush=True)
         rows = np.empty((len(texts), len(sorted_rows[0])), dtype=np.float32)
         rows[order] = sorted_rows
-        mean = rows.mean(axis=1, keepdims=True)
-        rows = (rows - mean) / np.sqrt(rows.var(axis=1, keepdims=True) + 1e-5)  # layer norm
         print(f"embedded {len(texts)} {what} in {time.time() - start:.0f}s", flush=True)
-        return rows
+        return layer_norm(rows)
 
     docs = [json.loads(line) for line in open(out / "corpus.jsonl", encoding="utf-8")][:limit]
     texts = [f"{doc_prefix}{d.get('title', '')} {d.get('text', '')}".strip() for d in docs]

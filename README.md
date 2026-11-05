@@ -219,8 +219,8 @@ uv run --with fastembed scripts/prep_beir.py scifact --model nomic-ai/nomic-embe
     --query-vectors data/scifact/queries.fbin
 
 # serve it
-python scripts/embed_server.py --model nomic-ai/nomic-embed-text-v1.5 &
-./target/release/telusur serve --index indexes/scifact --embedder http://127.0.0.1:8001
+uv run --with fastembed scripts/embed_server.py --model nomic-ai/nomic-embed-text-v1.5 &
+./target/release/telusur serve --index indexes/scifact --embedder http://127.0.0.1:8001 &
 curl -s localhost:8080/search -d '{"query":"does vitamin d prevent fractures","mode":"hybrid","k":5,"debug":true}'
 
 ```
@@ -243,6 +243,8 @@ Rules I hold myself to: release build, warm cache, single-thread latency over 1,
 | ANN recall vs latency       | `telusur bench ann --index indexes/dbpedia --queries ... --gt ...` |
 | Filters                     | `telusur bench filters ...`                                        |
 | BM25 quality                | `telusur eval beir --data data/<set> --index indexes/<set>`        |
+| Keyword, neural, hybrid quality | `telusur eval beir ... --query-vectors data/<set>/queries.fbin` |
+| HTTP latency per stage      | `telusur bench http --queries ...` against `telusur serve`         |
 | BM25 speed + memory         | `telusur bench bm25 ...` and `telusur bench ablate-postings ...`   |
 | Ingest                      | `telusur ingest fineweb --parquet data/fineweb --out ...`          |
 

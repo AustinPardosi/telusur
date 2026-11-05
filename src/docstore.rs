@@ -82,6 +82,11 @@ impl DocStore {
         })
     }
 
+    /// Number of docs (the offsets file has one entry more).
+    pub fn count(&self) -> usize {
+        self.offsets.len() / 8 - 1
+    }
+
     /// External id, title, url and snippet of `doc`.
     pub fn get(&self, doc: u32) -> Result<[&str; 4]> {
         let off = |i: usize| u64::from_le_bytes(self.offsets[i * 8..i * 8 + 8].try_into().unwrap());

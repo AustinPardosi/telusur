@@ -8,6 +8,7 @@ repository = "https://github.com/AustinPardosi/telusur"
 
 [dependencies]
 anyhow = "1.0.104"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 bytemuck = "1.25.2"
 clap = { version = "4", features = ["derive"] }
 fst = "0.4.7"
@@ -17,9 +18,11 @@ memmap2 = "0.9.12"
 rand = "0.9"
 rand_distr = "0.5"
 rayon = "1.12.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 roaring = "0.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "time"] }
 unicode-segmentation = "1.13.3"
 
 [dev-dependencies]

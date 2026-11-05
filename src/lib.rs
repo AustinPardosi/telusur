@@ -3,6 +3,7 @@ pub mod docstore;
 pub mod engine;
 pub mod eval;
 pub mod filter;
+pub mod server;
 pub mod synth;
 pub mod util;
 

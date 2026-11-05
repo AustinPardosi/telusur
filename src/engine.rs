@@ -23,7 +23,7 @@ use std::{
 
 pub const MAX_K: usize = 1000;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Keyword,
@@ -39,6 +39,10 @@ pub enum FallbackReason {
     NoVectors,
     /// There is no query vector and nothing to embed the query text with.
     NoEmbedder,
+    /// The embedder failed or sent back something unusable.
+    EmbedderError,
+    /// The embedder did not answer in time.
+    EmbedderTimeout,
 }
 
 pub struct Request {
@@ -156,6 +160,8 @@ pub fn rrf(keyword: &[(u32, f32)], neural: &[(u32, f32)], k: usize) -> Vec<(u32,
 /// Milliseconds per stage. Only the stages that ran appear.
 #[derive(Debug, Default, Serialize)]
 pub struct Timings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embed: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -282,6 +288,15 @@ impl Index {
             vectors: VectorIndex::open(dir)?,
             filters: FilterIndex::open(dir)?,
         })
+    }
+
+    pub fn docs(&self) -> usize {
+        self.docs.count()
+    }
+
+    /// Dims of the full vectors the index was built from, if it has vectors.
+    pub fn vector_dims(&self) -> Option<usize> {
+        self.vectors.as_ref().map(VectorIndex::dims)
     }
 
     pub fn search(&self, req: &Request) -> Result<Response> {

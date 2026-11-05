@@ -13,8 +13,9 @@ use crate::{
         quant::{binarize, truncate_normalize},
     },
 };
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use serde::Serialize;
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path, thread, time::Instant};
 
 /// Latency is measured over at least this many queries, cycling through the query set.
@@ -594,5 +595,149 @@ pub fn filters(
         kernel,
         machine: hardware(),
         runs,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HttpReport {
+    pub bench: &'static str,
+    pub url: String,
+    pub queries: usize,
+    pub timed_queries: usize,
+    pub k: usize,
+    /// Whether requests carried query vectors; without them the server embeds query text.
+    pub vectors_in_request: bool,
+    /// The server's GET /stats.
+    pub server: Value,
+    pub machine: String,
+    pub modes: Vec<HttpRun>,
+}
+
+#[derive(Serialize)]
+pub struct HttpRun {
+    pub mode: Mode,
+    /// Request sent to response read, at the client.
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub mean_ms: f64,
+    /// The server's `timings_ms`, per stage: p50, p99 and mean.
+    pub stages: BTreeMap<String, [f64; 3]>,
+    /// Responses whose `mode_used` differs from the mode asked for (should be 0).
+    pub fallbacks: usize,
+}
+
+/// B12: one client, one request at a time, against a running `telusur serve` at `url`. Query
+/// text comes from `field` of each line of `queries`; with `vectors`, row i goes with line i
+/// in neural and hybrid requests. Bodies are serialized before timing.
+pub fn http(
+    url: &str,
+    queries: &Path,
+    field: &str,
+    vectors: Option<&Fbin>,
+    modes: &[Mode],
+    k: usize,
+) -> Result<HttpReport> {
+    let texts: Vec<String> = fs::read_to_string(queries)?
+        .lines()
+        .map(|l| -> Result<String> {
+            let v: Value = serde_json::from_str(l)?;
+            Ok(v[field]
+                .as_str()
+                .with_context(|| format!("a query has no string field {field}"))?
+                .to_string())
+        })
+        .collect::<Result<_>>()?;
+    if let Some(v) = vectors {
+        ensure!(
+            v.n == texts.len(),
+            "{} queries but {} vectors",
+            texts.len(),
+            v.n
+        );
+    }
+    let timed = texts.len() * MIN_TIMED.div_ceil(texts.len().max(1));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let client = reqwest::Client::new();
+    let url = url.trim_end_matches('/');
+    let server: Value = rt.block_on(async {
+        client
+            .get(format!("{url}/stats"))
+            .send()
+            .await?
+            .json()
+            .await
+    })?;
+
+    let mut runs = Vec::new();
+    for &mode in modes {
+        let bodies: Vec<String> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let mut b = json!({ "query": q, "mode": mode, "k": k });
+                if let (Some(v), Mode::Neural | Mode::Hybrid) = (vectors, mode) {
+                    b["vector"] = json!(v.row(i));
+                }
+                b.to_string()
+            })
+            .collect();
+        let send = |body: &String| {
+            let req = client
+                .post(format!("{url}/search"))
+                .header("content-type", "application/json")
+                .body(body.clone());
+            async move {
+                let res = req.send().await?;
+                ensure!(res.status().is_success(), "HTTP {}", res.status());
+                Ok::<Value, anyhow::Error>(res.json().await?)
+            }
+        };
+        let (lat, stages, fallbacks) = rt.block_on(async {
+            for b in &bodies {
+                send(b).await?; // warm-up
+            }
+            let (mut lat, mut stages, mut fallbacks) = (Vec::new(), BTreeMap::new(), 0);
+            for b in bodies.iter().cycle().take(timed) {
+                let start = Instant::now();
+                let res = send(b).await?;
+                lat.push(start.elapsed().as_secs_f64() * 1e3);
+                fallbacks += usize::from(res["mode_used"] != json!(mode));
+                for (stage, ms) in res["timings_ms"].as_object().into_iter().flatten() {
+                    let ms = ms.as_f64().unwrap_or(0.0);
+                    stages
+                        .entry(stage.clone())
+                        .or_insert_with(Vec::new)
+                        .push(ms);
+                }
+            }
+            Ok::<_, anyhow::Error>((lat, stages, fallbacks))
+        })?;
+        let summary = |mut v: Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            let mean = v.iter().sum::<f64>() / v.len().max(1) as f64;
+            [percentile(&v, 50.0), percentile(&v, 99.0), mean]
+        };
+        let [p50_ms, p99_ms, mean_ms] = summary(lat);
+        runs.push(HttpRun {
+            mode,
+            p50_ms,
+            p99_ms,
+            mean_ms,
+            stages: stages.into_iter().map(|(s, v)| (s, summary(v))).collect(),
+            fallbacks,
+        });
+    }
+    Ok(HttpReport {
+        bench: "http",
+        url: url.to_string(),
+        queries: texts.len(),
+        timed_queries: timed,
+        k,
+        vectors_in_request: vectors.is_some(),
+        server,
+        machine: hardware(),
+        modes: runs,
     })
 }
