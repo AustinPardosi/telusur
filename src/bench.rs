@@ -3,9 +3,15 @@
 use crate::{
     engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     eval::load_beir,
+    filter::{Filter, FilterIndex, Filters},
     text::{analyzer::analyze, index::Footprint},
-    util::{Fbin, hardware, percentile},
-    vector::{ivf::VectorIndex, kernel::Kernel},
+    util::{Fbin, TopK, hardware, percentile},
+    vector::{
+        ivf::{self, VectorIndex},
+        kernel::{Kernel, QueryLut, pack_blocks, scan},
+        kmeans::exact_topk,
+        quant::{binarize, truncate_normalize},
+    },
 };
 use anyhow::Result;
 use serde::Serialize;
@@ -337,6 +343,254 @@ pub fn ann(
         k: K,
         queries: qs.len(),
         timed_queries: timed,
+        kernel,
+        machine: hardware(),
+        runs,
+    })
+}
+
+#[derive(Serialize)]
+pub struct QuantReport {
+    pub bench: &'static str,
+    pub docs: usize,
+    pub queries: usize,
+    pub k: usize,
+    /// What recall is measured against.
+    pub reference: String,
+    pub kernel: Kernel,
+    pub machine: String,
+    pub rows: Vec<QuantRow>,
+}
+
+/// Recall@100 of each first-stage scorer at one code size.
+#[derive(Serialize)]
+pub struct QuantRow {
+    pub dims: usize,
+    /// Binary query against binary codes: agreeing bits.
+    pub hamming: f64,
+    /// Float query against binary codes, exactly: the dot product with the codes' +1 / -1.
+    pub float_table: f64,
+    /// The same with the u8-quantized lookup tables the kernels use.
+    pub u8_table: f64,
+}
+
+/// B2: how much of the true top 100 each first-stage scorer finds in its own top 100, over
+/// the first `docs` base rows, scanning every code (no clusters). The truth is the exact top
+/// 100 by cosine at the rerank dims: the docs the reranker needs to be handed.
+pub fn ablate_quant(
+    base: &Fbin,
+    queries: &Fbin,
+    docs: usize,
+    dims: &[usize],
+    d_rerank: usize,
+) -> Result<QuantReport> {
+    const K: usize = 100;
+    let n = docs.min(base.n);
+    let kernel = Kernel::default_for_process()?;
+    let prefix = |v: &[f32], d: usize| truncate_normalize(v, d);
+    let flat = |d: usize, f: &dyn Fn(&[f32]) -> Vec<f32>| -> Vec<f32> {
+        (0..queries.n)
+            .flat_map(|i| f(&queries.row(i)[..d]))
+            .collect()
+    };
+    let truth = exact_topk(
+        n,
+        d_rerank,
+        |i| prefix(base.row(i), d_rerank),
+        &flat(d_rerank, &|q| prefix(q, d_rerank)),
+        K,
+    );
+    let recall = |found: &[Vec<u32>]| {
+        found
+            .iter()
+            .zip(&truth)
+            .map(|(f, t)| f.iter().filter(|d| t.contains(d)).count())
+            .sum::<usize>() as f64
+            / (K * truth.len()) as f64
+    };
+    let signs = |v: &[f32]| {
+        v.iter()
+            .map(|&x| if x > 0.0 { 1.0 } else { -1.0 })
+            .collect::<Vec<f32>>()
+    };
+
+    let mut rows = Vec::new();
+    for &d in dims {
+        anyhow::ensure!(
+            d.is_multiple_of(64) && d <= base.d.min(1024),
+            "code dims must be multiples of 64, at most 1024"
+        );
+        let code_signs = |i: usize| signs(&base.row(i)[..d]);
+        let hamming = exact_topk(n, d, code_signs, &flat(d, &signs), K);
+        let float_table = exact_topk(n, d, code_signs, &flat(d, &|q| prefix(q, d)), K);
+
+        let mut codes = vec![0u8; n * d / 8];
+        for (i, code) in codes.chunks_exact_mut(d / 8).enumerate() {
+            binarize(&base.row(i)[..d], code);
+        }
+        let blocks = pack_blocks(&codes, d / 8);
+        let mut scores = vec![0u16; n.div_ceil(32) * 32];
+        let mut u8_table = Vec::with_capacity(queries.n);
+        for qi in 0..queries.n {
+            scan(
+                kernel,
+                &QueryLut::new(&prefix(queries.row(qi), d)),
+                &blocks,
+                &mut scores,
+            )?;
+            let mut top = TopK::new(K);
+            for (doc, &s) in (0..n as u32).zip(&scores) {
+                top.push(doc, f32::from(s));
+            }
+            u8_table.push(
+                top.into_sorted()
+                    .into_iter()
+                    .map(|(doc, _)| doc)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        rows.push(QuantRow {
+            dims: d,
+            hamming: recall(&hamming),
+            float_table: recall(&float_table),
+            u8_table: recall(&u8_table),
+        });
+    }
+    Ok(QuantReport {
+        bench: "ablate-quant",
+        docs: n,
+        queries: queries.n,
+        k: K,
+        reference: format!("exact top {K} by cosine at {d_rerank} dims, over the same {n} docs"),
+        kernel,
+        machine: hardware(),
+        rows,
+    })
+}
+
+#[derive(Serialize)]
+pub struct FilterReport {
+    pub bench: &'static str,
+    pub index: String,
+    pub field: String,
+    pub queries: usize,
+    pub nprobe: usize,
+    pub rerank_depth: usize,
+    pub kernel: Kernel,
+    pub machine: String,
+    pub runs: Vec<FilterRun>,
+}
+
+#[derive(Serialize)]
+pub struct FilterRun {
+    /// Share of docs the filter allows; 1.0 is no filter.
+    pub selectivity: f64,
+    pub docs_allowed: u64,
+    /// "exact" scores every allowed doc; "clusters" probes nprobe / selectivity clusters.
+    pub path: &'static str,
+    pub clusters_probed_mean: f64,
+    /// Against the exact top 10 among the allowed docs, by cosine at the rerank dims.
+    pub recall_at_10: f64,
+    /// Filter lookup plus neural search, one thread.
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+}
+
+/// B5: filtered neural search on the index in `dir`, whose `field` holds categories c0 to
+/// c(categories - 1). Selectivity s picks the first s x categories of them. Each query
+/// resolves the filter (bitmap lookups) and searches with it, as the engine does.
+pub fn filters(
+    dir: &Path,
+    base: &Fbin,
+    queries: &Fbin,
+    field: &str,
+    categories: usize,
+    selectivities: &[f64],
+) -> Result<FilterReport> {
+    const K: usize = 10;
+    let index = VectorIndex::open(dir)?
+        .ok_or_else(|| anyhow::anyhow!("{} has no vectors", dir.display()))?;
+    let filter_index = FilterIndex::open(dir)?;
+    let kernel = Kernel::default_for_process()?;
+    let (nprobe, rerank_depth) = (ivf::DEFAULT_NPROBE, 500);
+    let d_rerank = base.d.min(1024);
+    let qs: Vec<&[f32]> = (0..queries.n).map(|i| queries.row(i)).collect();
+    let q_flat: Vec<f32> = qs
+        .iter()
+        .flat_map(|q| truncate_normalize(q, d_rerank))
+        .collect();
+
+    let mut runs = Vec::new();
+    for &s in std::iter::once(&1.0).chain(selectivities) {
+        let filters: Filters = if s < 1.0 {
+            let m = ((s * categories as f64).round() as usize).max(1);
+            [(
+                field.to_string(),
+                Filter::Any((0..m).map(|c| format!("c{c}")).collect()),
+            )]
+            .into()
+        } else {
+            Filters::new()
+        };
+        let allowed = filter_index.allowed(&filters)?;
+        let ids: Vec<u32> = match &allowed {
+            Some(a) => a.iter().collect(),
+            None => (0..base.n as u32).collect(),
+        };
+        let truth: Vec<Vec<u32>> = exact_topk(
+            ids.len(),
+            d_rerank,
+            |j| truncate_normalize(base.row(ids[j] as usize), d_rerank),
+            &q_flat,
+            K,
+        )
+        .into_iter()
+        .map(|t| t.into_iter().map(|j| ids[j as usize]).collect())
+        .collect();
+
+        let search = |q: &[f32]| -> Result<(Vec<(u32, f32)>, ivf::Trace)> {
+            let allowed = filter_index.allowed(&filters)?;
+            index.search(q, K, rerank_depth, nprobe, kernel, allowed.as_ref())
+        };
+        let (mut found, mut probed) = (0, 0);
+        for (q, t) in qs.iter().zip(&truth) {
+            let (hits, trace) = search(q)?;
+            found += hits.iter().filter(|(d, _)| t.contains(d)).count();
+            probed += trace.clusters_probed;
+        }
+        let mut lat = Vec::with_capacity(qs.len());
+        for q in qs
+            .iter()
+            .cycle()
+            .take(qs.len() * MIN_TIMED.div_ceil(qs.len().max(1)))
+        {
+            let start = Instant::now();
+            search(q)?;
+            lat.push(start.elapsed().as_secs_f64() * 1e3);
+        }
+        lat.sort_by(f64::total_cmp);
+        let allowed_docs = ids.len() as u64;
+        runs.push(FilterRun {
+            selectivity: allowed_docs as f64 / base.n as f64,
+            docs_allowed: allowed_docs,
+            path: if allowed.is_some() && allowed_docs <= ivf::EXACT_FILTER_MAX {
+                "exact"
+            } else {
+                "clusters"
+            },
+            clusters_probed_mean: probed as f64 / qs.len() as f64,
+            recall_at_10: found as f64 / (K * qs.len()) as f64,
+            p50_ms: percentile(&lat, 50.0),
+            p99_ms: percentile(&lat, 99.0),
+        });
+    }
+    Ok(FilterReport {
+        bench: "filters",
+        index: dir.display().to_string(),
+        field: field.to_string(),
+        queries: qs.len(),
+        nprobe,
+        rerank_depth,
         kernel,
         machine: hardware(),
         runs,

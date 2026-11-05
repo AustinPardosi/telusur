@@ -1,6 +1,6 @@
 //! Matryoshka truncation, 1-bit codes, and dot products.
 
-use half::f16;
+use half::{f16, slice::HalfFloatSliceExt};
 
 /// The first `dims` values of `v`, scaled to unit length. A zero vector stays zero.
 pub fn truncate_normalize(v: &[f32], dims: usize) -> Vec<f32> {
@@ -23,10 +23,29 @@ pub fn binarize(v: &[f32], out: &mut [u8]) {
     }
 }
 
+/// Adds in 16 lanes: a plain `.sum()` must add in order, which keeps the compiler from
+/// vectorizing it.
 pub fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    debug_assert_eq!(a.len(), b.len());
+    let ((a16, a_rest), (b16, b_rest)) = (a.as_chunks::<16>(), b.as_chunks::<16>());
+    let mut lanes = [0f32; 16];
+    for (x, y) in a16.iter().zip(b16) {
+        for i in 0..16 {
+            lanes[i] += x[i] * y[i];
+        }
+    }
+    lanes.iter().sum::<f32>() + a_rest.iter().zip(b_rest).map(|(x, y)| x * y).sum::<f32>()
 }
 
+/// Converts 64 halves at a time with `half`'s SIMD slice conversion, then `dot`.
 pub fn dot_f16(a: &[f16], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x.to_f32() * y).sum()
+    let mut buf = [0f32; 64];
+    a.chunks(64)
+        .zip(b.chunks(64))
+        .map(|(x, y)| {
+            let buf = &mut buf[..x.len()];
+            x.convert_to_f32_slice(buf);
+            dot(buf, y)
+        })
+        .sum()
 }

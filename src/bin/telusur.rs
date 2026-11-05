@@ -132,6 +132,38 @@ enum Bench {
         #[arg(long)]
         out: PathBuf,
     },
+    /// B2: recall@100 of Hamming, float-table and u8-table first-stage scoring
+    AblateQuant {
+        #[arg(long)]
+        base: PathBuf,
+        #[arg(long)]
+        queries: PathBuf,
+        /// Use the first this many base rows
+        #[arg(long, default_value_t = 200_000)]
+        docs: usize,
+        #[arg(long, value_delimiter = ',', default_value = "64,128,256,512")]
+        dims: Vec<usize>,
+        /// Dims of the cosine the truth is ranked by [default: the smaller of 1024 and the dims]
+        #[arg(long)]
+        d_rerank: Option<usize>,
+    },
+    /// B5: filtered neural search latency and recall@10 at several selectivities
+    Filters {
+        #[arg(long)]
+        index: PathBuf,
+        /// The base vectors the index was built from, for the exact filtered truth
+        #[arg(long)]
+        base: PathBuf,
+        #[arg(long)]
+        queries: PathBuf,
+        /// Keyword field holding categories c0, c1, ... (see scripts/add_categories.py)
+        #[arg(long, default_value = "category")]
+        field: String,
+        #[arg(long, default_value_t = 1000)]
+        categories: usize,
+        #[arg(long, value_delimiter = ',', default_value = "0.001,0.01,0.1,0.5")]
+        selectivity: Vec<f64>,
+    },
     /// B3: neural recall@10, latency and QPS over clusters probed x rerank depth
     Ann {
         #[arg(long)]
@@ -326,6 +358,36 @@ fn main() -> Result<()> {
         }
         Cmd::Bench(Bench::AblatePostings { corpus, out }) => {
             let report = bench::ablate_postings(&corpus, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::AblateQuant {
+            base,
+            queries,
+            docs,
+            dims,
+            d_rerank,
+        }) => {
+            let base = Fbin::open(&base)?;
+            let d_rerank = d_rerank.unwrap_or(base.d.min(1024));
+            let report = bench::ablate_quant(&base, &Fbin::open(&queries)?, docs, &dims, d_rerank)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::Filters {
+            index,
+            base,
+            queries,
+            field,
+            categories,
+            selectivity,
+        }) => {
+            let report = bench::filters(
+                &index,
+                &Fbin::open(&base)?,
+                &Fbin::open(&queries)?,
+                &field,
+                categories,
+                &selectivity,
+            )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Bench(Bench::Ann {

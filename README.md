@@ -42,7 +42,7 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | -------------------------------------------------------- | ------------------------------------- |
 | Codes scored per second, one core (256-dim, best kernel) | 516M (NEON, Apple M4)                 |
 | Speedup over scalar                                      | 11x (NEON, Apple M4)                  |
-| Recall@10 on 1M OpenAI embeddings                        | 0.952 at 2.1 ms p50 (0.835 vs full)   |
+| Recall@10 on 1M OpenAI embeddings                        | 0.952 at 0.58 ms p50 (0.835 vs full)  |
 | Hot memory per vector                                    | 37.2 bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
 | BM25 index size vs naive                                 | 87% smaller (BEIR NQ)                 |
@@ -122,9 +122,11 @@ Why not Hamming distance? Keeping the query in float loses much less information
 
 | First-stage scorer                | Recall@100 (256-dim codes) |
 | --------------------------------- | -------------------------- |
-| Hamming (binary query)            | TBD                        |
-| Asymmetric, float table           | TBD                        |
-| Asymmetric, u8 table (what ships) | TBD                        |
+| Hamming (binary query)            | 0.304                      |
+| Asymmetric, float table           | 0.425                      |
+| Asymmetric, u8 table (what ships) | 0.425                      |
+
+200k DBpedia vectors, the true top 100 by cosine at 1024 dims, Apple M4 ([B2](bench-results/b2-ablate-quant-2026-11-05.md), 64 to 512 dims there). The float query finds 1.25x to 1.7x as many of the true neighbors as Hamming at every code size, and quantizing its tables to u8 costs nothing measurable.
 
 
  
@@ -183,12 +185,15 @@ Filters (domain, crawl date range, any keyword field) are roaring bitmaps. If a 
  
 
 
-| Selectivity | p50 | Recall@10 |
-| ----------- | --- | --------- |
-| 0.1%        | TBD | TBD       |
-| 1%          | TBD | TBD       |
-| 10%         | TBD | TBD       |
-| 50%         | TBD | TBD       |
+| Selectivity | p50 ms | Recall@10 | Path |
+| ----------- | ------ | --------- | ---- |
+| none        | 0.59   | 0.952     | 256 clusters |
+| 0.1%        | 0.14   | 1.000     | exact |
+| 1%          | 2.20   | 1.000     | exact |
+| 10%         | 4.09   | 0.963     | 2,048 clusters |
+| 50%         | 3.51   | 0.961     | 513 clusters |
+
+DBpedia 1M with synthetic categories, neural search at the defaults, Apple M4 ([B5](bench-results/b5-filters-dbpedia-2026-11-05.md)). Recall is against the exact top 10 among the allowed docs. At 1% the exact path takes 3.7x the unfiltered latency, so it misses the 2x target; 10% and 50% probe nearly every cluster.
 
 
  
@@ -272,12 +277,12 @@ DBpedia 1M, OpenAI text-embedding-3-large (3072 dims), 2,048 clusters, 256-dim c
 
 | Clusters probed | Rerank depth | Recall@10 (rerank / full GT) | p50 ms | p99 ms | QPS (4 / 10 threads) |
 | --------------- | ------------ | ---------------------------- | ------ | ------ | -------------------- |
-| 32              | 0            | 0.457 / 0.441                | 0.43   | 0.47   | 9,954 / 21,680       |
-| 32              | 200          | 0.839 / 0.754                | 0.79   | 0.85   | 5,141 / 7,635        |
-| 128             | 200          | 0.894 / 0.800                | 1.14   | 1.44   | 3,676 / 4,202        |
-| 128             | 500          | 0.932 / 0.821                | 1.69   | 2.52   | 2,426 / 4,014        |
-| 256 (default)   | 500          | 0.952 / 0.835                | 2.09   | 3.27   | 1,941 / 2,784        |
-| 512             | 1000         | 0.976 / 0.849                | 3.61   | 4.59   | 1,093 / 1,737        |
+| 32              | 0            | 0.457 / 0.441                | 0.08   | 0.09   | 42,910 / 65,843      |
+| 32              | 200          | 0.839 / 0.754                | 0.17   | 0.18   | 18,228 / 31,792      |
+| 128             | 200          | 0.894 / 0.800                | 0.28   | 0.33   | 11,452 / 17,794      |
+| 128             | 500          | 0.932 / 0.821                | 0.40   | 0.44   | 7,761 / 11,863       |
+| 256 (default)   | 500          | 0.952 / 0.835                | 0.58   | 0.69   | 5,674 / 8,809        |
+| 512             | 1000         | 0.976 / 0.849                | 1.10   | 1.48   | 2,939 / 3,521        |
 
 The defaults, 256 clusters probed and a rerank depth of 500, are the smallest that reach 0.95 against rerank ground truth; at depth 200 recall stops near 0.92 however many clusters are probed. Against full ground truth recall tops out near 0.85: that is the cost of reranking with 1024 of the 3072 dims. QPS at 10 threads is noisy on a laptop with other apps open.
 
