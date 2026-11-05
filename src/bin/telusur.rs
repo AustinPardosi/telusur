@@ -6,7 +6,7 @@ use telusur::{
     engine::{self, BuildOptions, Index, Mode, Request, Strategy},
     eval,
     filter::{Filter, Filters},
-    server, synth,
+    ingest, server, synth,
     util::{Fbin, read_ibin, write_ibin},
     vector::{kernel::Kernel, kmeans},
 };
@@ -113,6 +113,9 @@ enum Cmd {
         #[arg(long)]
         embedder: Option<String>,
     },
+    /// Turn a crawl into corpus.jsonl and print a JSON report of how fast each stage ran
+    #[command(subcommand)]
+    Ingest(Ingest),
     /// Measure retrieval quality and print a JSON report
     #[command(subcommand)]
     Eval(Eval),
@@ -216,6 +219,21 @@ enum Bench {
         /// Thread counts to measure QPS at
         #[arg(long, value_delimiter = ',', default_value = "4,10")]
         threads: Vec<usize>,
+    },
+}
+
+#[derive(Subcommand)]
+enum Ingest {
+    /// B11: FineWeb parquet (a file or a directory of them) to corpus.jsonl, with domain and
+    /// crawl_date fields, exact duplicates dropped
+    Fineweb {
+        #[arg(long)]
+        parquet: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Stop after writing this many docs
+        #[arg(long)]
+        limit: Option<u64>,
     },
 }
 
@@ -388,6 +406,14 @@ fn main() -> Result<()> {
             addr,
             embedder,
         } => tokio::runtime::Runtime::new()?.block_on(server::serve(&index, &addr, embedder))?,
+        Cmd::Ingest(Ingest::Fineweb {
+            parquet,
+            out,
+            limit,
+        }) => {
+            let report = ingest::fineweb(&parquet, &out, limit)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Cmd::Eval(Eval::Beir {
             data,
             index,

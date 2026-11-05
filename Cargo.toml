@@ -8,6 +8,7 @@ repository = "https://github.com/AustinPardosi/telusur"
 
 [dependencies]
 anyhow = "1.0.104"
+arrow-array = "60.1.0"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 bytemuck = "1.25.2"
 clap = { version = "4", features = ["derive"] }
@@ -15,6 +16,7 @@ fst = "0.4.7"
 half = { version = "2.7.1", features = ["bytemuck"] }
 matrixmultiply = "0.3.11"
 memmap2 = "0.9.12"
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "snap"] }
 rand = "0.9"
 rand_distr = "0.5"
 rayon = "1.12.0"
