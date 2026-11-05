@@ -5,7 +5,7 @@
 //! slot, `u32::MAX` for padding), `rerank.f16` (d_rerank f16 per doc, in doc id order).
 
 use super::{
-    kernel::{BLOCK, QueryLut, pack_blocks, scan_scalar},
+    kernel::{BLOCK, Kernel, QueryLut, pack_blocks, scan},
     quant::{binarize, dot_f16, truncate_normalize},
 };
 use crate::util::{Fbin, MmapSlice, TopK, mmap};
@@ -105,14 +105,15 @@ impl VectorIndex {
         }))
     }
 
-    /// Top k (doc, score) for a full query vector: scan the codes, keep the `rerank_depth`
-    /// best (at least k), then score those exactly with rerank vectors. Ties go to the smaller
-    /// doc id.
+    /// Top k (doc, score) for a full query vector: scan the codes with `kernel`, keep the
+    /// `rerank_depth` best (at least k), then score those exactly with rerank vectors. Ties go
+    /// to the smaller doc id.
     pub fn search(
         &self,
         query: &[f32],
         k: usize,
         rerank_depth: usize,
+        kernel: Kernel,
     ) -> Result<(Vec<(u32, f32)>, StageTimes)> {
         let Meta {
             dims,
@@ -132,7 +133,7 @@ impl VectorIndex {
         let t = Instant::now();
         let lut = QueryLut::new(&truncate_normalize(query, d_code));
         let mut scores = vec![0u16; ids.len()];
-        scan_scalar(&lut, &self.codes, &mut scores);
+        scan(kernel, &lut, &self.codes, &mut scores)?;
         let mut candidates = TopK::new(rerank_depth.max(k));
         let mut min_accept = 0u16;
         for (&doc, &s) in ids.iter().zip(&scores) {

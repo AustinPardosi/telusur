@@ -40,8 +40,8 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 
 |                                                          |                                       |
 | -------------------------------------------------------- | ------------------------------------- |
-| Codes scored per second, one core (256-dim, best kernel) | TBD                                   |
-| Speedup over scalar                                      | TBD                                   |
+| Codes scored per second, one core (256-dim, best kernel) | 516M (NEON, Apple M4)                 |
+| Speedup over scalar                                      | 11x (NEON, Apple M4)                  |
 | Recall@10 on 1M OpenAI embeddings                        | TBD at TBD ms p50                     |
 | Hot memory per vector                                    | TBD bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
@@ -105,10 +105,12 @@ There are four kernels (scalar, AVX2, AVX-512, NEON), picked at runtime. Every o
 
 | Kernel  | Codes/s per core (256-dim) |
 | ------- | -------------------------- |
-| scalar  | TBD                        |
+| scalar  | 46.3M (Apple M4)           |
 | AVX2    | TBD                        |
 | AVX-512 | TBD                        |
-| NEON    | TBD                        |
+| NEON    | 516M (Apple M4)            |
+
+Measured with `cargo bench --bench kernels` ([B1](bench-results/b1-kernels-2026-11-05.md)). The AVX2 and AVX-512 rows wait for the x86 VM run; on the Mac, NEON is 11x scalar at 256 and 512 dims.
 
 
  

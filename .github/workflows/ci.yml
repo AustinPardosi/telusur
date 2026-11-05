@@ -24,3 +24,21 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --release
+
+  # GitHub's runners may lack AVX-512, so the kernel tests also run under Intel SDE emulating a
+  # Sapphire Rapids CPU, with the AVX-512 kernel forced (the test fails if SDE does not expose
+  # it). Using SDE means accepting Intel's SDE license.
+  avx512-sde:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec # v6.0
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+      - run: cargo test --release --test kernel -- --nocapture
+        env:
+          TELUSUR_KERNEL: avx512
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ env.SDE_PATH }}/sde64 -spr --

@@ -4,7 +4,10 @@ use crate::{
     docstore::{self, DocStore},
     text::index::{self as keyword, KeywordIndex},
     util::Fbin,
-    vector::ivf::{self, VectorIndex},
+    vector::{
+        ivf::{self, VectorIndex},
+        kernel::Kernel,
+    },
 };
 use anyhow::{Context, Result, bail};
 pub use keyword::Strategy;
@@ -48,6 +51,8 @@ pub struct Request {
     pub vector: Option<Vec<f32>>,
     /// How many of the best codes neural search rescores exactly (at least k).
     pub rerank_depth: usize,
+    /// Debug option: the scoring kernel, instead of the process default.
+    pub kernel: Option<Kernel>,
 }
 
 impl Default for Request {
@@ -60,6 +65,7 @@ impl Default for Request {
             strategy: Strategy::default(),
             vector: None,
             rerank_depth: 200,
+            kernel: None,
         }
     }
 }
@@ -80,6 +86,8 @@ pub struct Response {
 pub struct Stats {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postings_decoded: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<Kernel>,
 }
 
 /// One result. `id` is the external id; doc ids never leave the engine.
@@ -225,7 +233,9 @@ impl Index {
         let mut stats = Stats::default();
         let hits = match neural {
             Some((index, q)) => {
-                let (hits, t) = index.search(q, req.k, req.rerank_depth)?;
+                let kernel = req.kernel.map_or_else(Kernel::default_for_process, Ok)?;
+                let (hits, t) = index.search(q, req.k, req.rerank_depth, kernel)?;
+                stats.kernel = Some(kernel);
                 (timings.route, timings.scan, timings.rerank) =
                     (Some(t.route), Some(t.scan), Some(t.rerank));
                 hits

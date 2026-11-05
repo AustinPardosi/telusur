@@ -6,6 +6,7 @@ use telusur::{
     engine::{self, BuildOptions, Index, Mode, Request, Strategy},
     eval, synth,
     util::Fbin,
+    vector::kernel::Kernel,
 };
 
 #[derive(Parser)]
@@ -53,6 +54,9 @@ enum Cmd {
         /// How many of the best codes neural search rescores exactly
         #[arg(long, default_value_t = 200)]
         rerank_depth: usize,
+        /// Debug option: scoring kernel [default: TELUSUR_KERNEL, else the fastest]
+        #[arg(long, value_enum)]
+        kernel: Option<Kernel>,
         #[arg(long, default_value_t = 10)]
         k: usize,
         #[arg(long, value_enum, default_value_t)]
@@ -197,6 +201,7 @@ fn main() -> Result<()> {
             query_vectors,
             query_row,
             rerank_depth,
+            kernel,
             k,
             mode,
             debug,
@@ -217,6 +222,7 @@ fn main() -> Result<()> {
                 strategy,
                 vector,
                 rerank_depth,
+                kernel,
             };
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);

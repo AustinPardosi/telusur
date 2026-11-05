@@ -5,6 +5,7 @@ use telusur::{
     engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     synth,
     util::Fbin,
+    vector::kernel::Kernel,
 };
 
 fn build(name: &str, docs: &[Value]) -> Index {
@@ -390,5 +391,31 @@ fn neural_modes_and_vector_checks() {
             engine::build(&dir.join("corpus.jsonl"), &dir.join("bad"), &opts).is_err(),
             "d_code {d_code}"
         );
+    }
+}
+
+#[test]
+fn every_kernel_returns_identical_results() {
+    let (index, _, queries) = vector_index("kernels", 3_000, 256);
+    for q in &queries {
+        let run = |kernel| {
+            let req = Request {
+                mode: Mode::Neural,
+                vector: Some(q.clone()),
+                kernel: Some(kernel),
+                debug: true,
+                ..Request::default()
+            };
+            let res = index.search(&req).unwrap();
+            assert_eq!(res.stats.unwrap().kernel, Some(kernel));
+            res.results
+                .into_iter()
+                .map(|h| (h.id, h.score.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        let want = run(Kernel::Scalar);
+        for kernel in Kernel::available() {
+            assert_eq!(run(kernel), want, "{kernel:?}");
+        }
     }
 }
