@@ -212,7 +212,7 @@ cargo build --release
 ./target/release/telusur search --index indexes/synth "w42 w1337"
 
 # real data: BEIR SciFact with embeddings
-python scripts/prep_beir.py scifact --model nomic-ai/nomic-embed-text-v1.5
+uv run --with fastembed scripts/prep_beir.py scifact --model nomic-ai/nomic-embed-text-v1.5
 ./target/release/telusur index --corpus data/scifact/corpus.jsonl \
     --vectors data/scifact/corpus.fbin --out indexes/scifact
 ./target/release/telusur eval beir --data data/scifact --index indexes/scifact \

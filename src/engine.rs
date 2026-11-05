@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 pub use keyword::Strategy;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -113,6 +114,43 @@ pub struct Hit {
     pub title: String,
     pub url: String,
     pub snippet: String,
+    /// Hybrid only: where each retriever ranked the doc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranks: Option<Ranks>,
+}
+
+/// 1-based ranks in each retriever's list; absent when the doc was not in that list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Ranks {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neural: Option<usize>,
+}
+
+/// RRF's k: a doc at rank r adds 1 / (60 + r).
+pub const RRF_K: f64 = 60.0;
+/// Hybrid takes the top max(k, this) of each retriever.
+pub const FUSE_DEPTH: usize = 100;
+
+/// Reciprocal rank fusion of two best-first lists: score = sum of 1 / (60 + rank). Top k,
+/// best first, ties to the smaller doc id.
+pub fn rrf(keyword: &[(u32, f32)], neural: &[(u32, f32)], k: usize) -> Vec<(u32, f64, Ranks)> {
+    let mut ranks: HashMap<u32, Ranks> = HashMap::new();
+    for (i, &(doc, _)) in keyword.iter().enumerate() {
+        ranks.entry(doc).or_default().keyword = Some(i + 1);
+    }
+    for (i, &(doc, _)) in neural.iter().enumerate() {
+        ranks.entry(doc).or_default().neural = Some(i + 1);
+    }
+    let term = |r: Option<usize>| r.map_or(0.0, |r| 1.0 / (RRF_K + r as f64));
+    let mut fused: Vec<_> = ranks
+        .into_iter()
+        .map(|(doc, r)| (doc, term(r.keyword) + term(r.neural), r))
+        .collect();
+    fused.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    fused.truncate(k);
+    fused
 }
 
 /// Milliseconds per stage. Only the stages that ran appear.
@@ -126,6 +164,8 @@ pub struct Timings {
     pub rerank: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keyword: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuse: Option<f64>,
     pub docs: f64,
     pub total: f64,
 }
@@ -251,7 +291,7 @@ impl Index {
         }
         let (neural, fallback_reason) = match (req.mode, &self.vectors, req.vector.as_deref()) {
             (Mode::Keyword, ..) => (None, None),
-            (Mode::Neural, Some(index), Some(q)) => (Some((index, q)), None),
+            (Mode::Neural | Mode::Hybrid, Some(index), Some(q)) => (Some((index, q)), None),
             (Mode::Neural, None, _) => {
                 bail!("neural search needs vectors, and this index was built without them")
             }
@@ -260,45 +300,81 @@ impl Index {
             }
             (Mode::Hybrid, None, _) => (None, Some(FallbackReason::NoVectors)),
             (Mode::Hybrid, Some(_), None) => (None, Some(FallbackReason::NoEmbedder)),
-            (Mode::Hybrid, Some(_), Some(_)) => {
-                bail!(
-                    "hybrid search with a query vector is not built yet; use keyword or neural mode"
-                )
-            }
+        };
+        let mode_used = match (req.mode, neural) {
+            (Mode::Neural, _) => Mode::Neural,
+            (Mode::Hybrid, Some(_)) => Mode::Hybrid,
+            _ => Mode::Keyword,
+        };
+        let depth = if mode_used == Mode::Hybrid {
+            req.k.max(FUSE_DEPTH)
+        } else {
+            req.k
         };
 
         let mut timings = Timings::default();
         let mut stats = Stats::default();
         let allowed = self.filters.allowed(&req.filters)?;
         stats.docs_allowed = allowed.as_ref().map(|a| a.len());
-        let hits = match neural {
-            Some((index, q)) => {
-                let kernel = req.kernel.map_or_else(Kernel::default_for_process, Ok)?;
-                let nprobe = req.nprobe.unwrap_or(ivf::DEFAULT_NPROBE);
-                let (hits, t) =
-                    index.search(q, req.k, req.rerank_depth, nprobe, kernel, allowed.as_ref())?;
-                stats.kernel = Some(kernel);
-                stats.clusters_probed = Some(t.clusters_probed);
-                stats.codes_scanned = Some(t.codes_scanned);
-                (timings.route, timings.scan, timings.rerank) =
-                    (Some(t.route), Some(t.scan), Some(t.rerank));
-                hits
-            }
-            None => {
+        let allowed = allowed.as_ref();
+        let run_neural = || -> Result<_> {
+            let Some((index, q)) = neural else {
+                return Ok(None);
+            };
+            let kernel = req.kernel.map_or_else(Kernel::default_for_process, Ok)?;
+            let nprobe = req.nprobe.unwrap_or(ivf::DEFAULT_NPROBE);
+            let (hits, trace) =
+                index.search(q, depth, req.rerank_depth, nprobe, kernel, allowed)?;
+            Ok(Some((hits, trace, kernel)))
+        };
+        let run_keyword = || {
+            (mode_used != Mode::Neural).then(|| {
                 let t = Instant::now();
-                let (hits, decoded) =
-                    self.keyword
-                        .search(&req.query, req.k, req.strategy, allowed.as_ref());
-                timings.keyword = Some(ms(t));
-                stats.postings_decoded = Some(decoded);
-                hits
+                let (hits, decoded) = self
+                    .keyword
+                    .search(&req.query, depth, req.strategy, allowed);
+                (hits, decoded, ms(t))
+            })
+        };
+        // Hybrid runs both retrievers in parallel; a single retriever runs on this thread.
+        let (neural_hits, keyword_hits) = if mode_used == Mode::Hybrid {
+            rayon::join(run_neural, run_keyword)
+        } else {
+            (run_neural(), run_keyword())
+        };
+        let neural_hits = neural_hits?.map(|(hits, t, kernel)| {
+            stats.kernel = Some(kernel);
+            stats.clusters_probed = Some(t.clusters_probed);
+            stats.codes_scanned = Some(t.codes_scanned);
+            (timings.route, timings.scan, timings.rerank) =
+                (Some(t.route), Some(t.scan), Some(t.rerank));
+            hits
+        });
+        let keyword_hits = keyword_hits.map(|(hits, decoded, t)| {
+            stats.postings_decoded = Some(decoded);
+            timings.keyword = Some(t);
+            hits
+        });
+        let hits: Vec<(u32, f32, Option<Ranks>)> = match (keyword_hits, neural_hits) {
+            (Some(kw), Some(nn)) => {
+                let t = Instant::now();
+                let fused = rrf(&kw, &nn, req.k);
+                timings.fuse = Some(ms(t));
+                fused
+                    .into_iter()
+                    .map(|(doc, score, r)| (doc, score as f32, Some(r)))
+                    .collect()
             }
+            (Some(hits), None) | (None, Some(hits)) => {
+                hits.into_iter().map(|(d, s)| (d, s, None)).collect()
+            }
+            (None, None) => unreachable!("one retriever always runs"),
         };
 
         let t = Instant::now();
         let results = hits
             .into_iter()
-            .map(|(doc, score)| {
+            .map(|(doc, score, ranks)| {
                 let [id, title, url, snippet] = self.docs.get(doc)?.map(String::from);
                 Ok(Hit {
                     id,
@@ -306,6 +382,7 @@ impl Index {
                     title,
                     url,
                     snippet,
+                    ranks,
                 })
             })
             .collect::<Result<_>>()?;
@@ -313,11 +390,7 @@ impl Index {
         timings.total = ms(start);
 
         Ok(Response {
-            mode_used: if neural.is_some() {
-                Mode::Neural
-            } else {
-                Mode::Keyword
-            },
+            mode_used,
             fallback_reason,
             results,
             timings_ms: timings,

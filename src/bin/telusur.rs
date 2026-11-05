@@ -72,7 +72,7 @@ enum Cmd {
         /// Query text (keyword and hybrid modes)
         #[arg(default_value = "")]
         query: String,
-        /// Take the query vector from this .fbin file (neural mode)
+        /// Take the query vector from this .fbin file (neural and hybrid modes)
         #[arg(long)]
         query_vectors: Option<PathBuf>,
         /// Row of --query-vectors to use
@@ -193,7 +193,12 @@ enum Eval {
         data: PathBuf,
         #[arg(long)]
         index: PathBuf,
-        /// Also write the run in TREC format, for checking with trec_eval
+        /// Query vectors (.fbin, with query_ids.txt next to it naming each row's query):
+        /// also evaluate neural and hybrid mode
+        #[arg(long)]
+        query_vectors: Option<PathBuf>,
+        /// Also write the run in TREC format, for checking with trec_eval (with .<mode>
+        /// appended when there are query vectors)
         #[arg(long)]
         run: Option<PathBuf>,
     },
@@ -343,8 +348,18 @@ fn main() -> Result<()> {
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);
         }
-        Cmd::Eval(Eval::Beir { data, index, run }) => {
-            let report = eval::beir(&Index::open(&index)?, &data, run.as_deref())?;
+        Cmd::Eval(Eval::Beir {
+            data,
+            index,
+            query_vectors,
+            run,
+        }) => {
+            let report = eval::beir(
+                &Index::open(&index)?,
+                &data,
+                query_vectors.as_deref(),
+                run.as_deref(),
+            )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Bench(Bench::Bm25 {

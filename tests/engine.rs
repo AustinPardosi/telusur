@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 use telusur::{
     bench,
-    engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
+    engine::{self, BuildOptions, Index, Mode, Ranks, Request, Response, Strategy},
     filter::{Filter, Filters},
     synth,
     util::Fbin,
@@ -475,6 +475,84 @@ fn probing_every_cluster_equals_one_cluster() {
     }
 }
 
+#[test]
+fn rrf_matches_hand_computed_scores() {
+    let kw = [(5, 9.0), (3, 8.0), (9, 7.0)];
+    let nn = [(3, 0.9), (7, 0.8)];
+    let ranks = |keyword, neural| Ranks { keyword, neural };
+    assert_eq!(
+        engine::rrf(&kw, &nn, 10),
+        [
+            (3, 1.0 / 62.0 + 1.0 / 61.0, ranks(Some(2), Some(1))),
+            (5, 1.0 / 61.0, ranks(Some(1), None)),
+            (7, 1.0 / 62.0, ranks(None, Some(2))),
+            (9, 1.0 / 63.0, ranks(Some(3), None)),
+        ]
+    );
+    assert_eq!(engine::rrf(&kw, &nn, 2).len(), 2);
+    // Equal scores go to the smaller doc id, whichever list it came from.
+    let tie: Vec<u32> = engine::rrf(&[(8, 1.0)], &[(2, 1.0)], 10)
+        .iter()
+        .map(|f| f.0)
+        .collect();
+    assert_eq!(tie, [2, 8]);
+}
+
+#[test]
+fn hybrid_is_rrf_over_both_retrievers() {
+    let (index, _, queries) = vector_index("hybrid", 3_000, 128);
+    let doc = |id: &str| id.trim_start_matches("synth-").parse::<u32>().unwrap();
+    for (i, q) in queries.iter().take(20).enumerate() {
+        let run = |mode, k| {
+            index
+                .search(&Request {
+                    query: format!("w{} w{} w0", i + 1, 2 * i + 7),
+                    mode,
+                    k,
+                    vector: Some(q.clone()),
+                    debug: true,
+                    ..Request::default()
+                })
+                .unwrap()
+        };
+        let list = |r: &Response| -> Vec<(u32, f32)> {
+            r.results.iter().map(|h| (doc(&h.id), h.score)).collect()
+        };
+        // Hybrid at k = 10 fuses the top 100 of each.
+        let (kw, nn) = (run(Mode::Keyword, 100), run(Mode::Neural, 100));
+        assert_eq!(kw.results.len(), 100);
+        let want = engine::rrf(&list(&kw), &list(&nn), 10);
+        let hybrid = run(Mode::Hybrid, 10);
+        let got: Vec<_> = hybrid
+            .results
+            .iter()
+            .map(|h| (doc(&h.id), h.score, h.ranks.unwrap()))
+            .collect();
+        let want: Vec<_> = want.into_iter().map(|(d, s, r)| (d, s as f32, r)).collect();
+        assert_eq!(got, want);
+
+        let json = serde_json::to_value(&hybrid).unwrap();
+        assert_eq!(json["mode_used"], "hybrid");
+        assert!(json.get("fallback_reason").is_none());
+        for t in [
+            "keyword", "route", "scan", "rerank", "fuse", "docs", "total",
+        ] {
+            assert!(json["timings_ms"][t].is_f64(), "{t}");
+        }
+        for s in ["postings_decoded", "clusters_probed", "codes_scanned"] {
+            assert!(json["stats"][s].is_u64(), "{s}");
+        }
+        assert!(json["results"][0]["ranks"].is_object());
+        // Single modes carry no ranks.
+        assert!(
+            kw.results
+                .iter()
+                .chain(&nn.results)
+                .all(|h| h.ranks.is_none())
+        );
+    }
+}
+
 /// Doc i: group `g{i % 1000}` unless i % 13 == 0, crawl date month 1 + i % 12 (as a UTC
 /// timestamp) unless i % 17 == 0.
 fn group_of(i: usize) -> Option<usize> {
@@ -549,6 +627,19 @@ fn filters_never_leak() {
                 expected <= 20_000,
                 "{groups} groups: path"
             );
+            let hybrid = index
+                .search(&Request {
+                    query: "w1 w2 w3".into(),
+                    mode: Mode::Hybrid,
+                    ..req
+                })
+                .unwrap();
+            assert_eq!(hybrid.mode_used, Mode::Hybrid);
+            assert!(
+                hybrid.results.iter().all(|h| passes(doc(&h.id))),
+                "hybrid, {groups} groups"
+            );
+            assert_eq!(hybrid.results.len() as u64, expected.min(50));
         }
         for q in ["w1 w2 w3", "w0 w5", "w1000 w1001 w42"] {
             let run = |strategy| {

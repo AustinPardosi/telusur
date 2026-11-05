@@ -1,19 +1,19 @@
-//! Retrieval quality the way Anserini's BEIR regressions measure it: keyword search for the
-//! top 1000, results whose doc id equals the query id dropped (`-removeQuery`), scores
+//! Retrieval quality the way Anserini's BEIR regressions measure it: search for the top 1000
+//! (keyword, and neural and hybrid when there are query vectors), results whose doc id equals the query id dropped (`-removeQuery`), scores
 //! rounded to 6 decimals as Anserini's run files write them, then trec_eval's nDCG@10 and
 //! Recall@100 averaged over every query in the qrels (`trec_eval -c`).
 
 use crate::{
     engine::{Index, MAX_K, Mode, Request, Strategy},
-    util::hardware,
+    util::{Fbin, hardware},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
     io::{BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -114,51 +114,107 @@ pub fn load_beir(data: &Path) -> Result<(Qrels, BTreeMap<String, String>)> {
     Ok((qrels, queries))
 }
 
-/// Runs the test queries of the BEIR dataset in `data` (corpus.jsonl, queries.jsonl,
-/// qrels/test.tsv) against `index`. Optionally writes the run in TREC format to `run_out`.
-pub fn beir(index: &Index, data: &Path, run_out: Option<&Path>) -> Result<Report> {
-    let (qrels, queries) = load_beir(data)?;
-    let start = Instant::now();
-    let mut run = Run::new();
-    let mut out = run_out.map(File::create).transpose()?.map(BufWriter::new);
-    for (qid, text) in &queries {
-        let res = index.search(&Request {
-            query: text.clone(),
-            mode: Mode::Keyword,
-            k: MAX_K,
-            // At k = 1000 there is little to prune, and exhaustive scores are the reference.
-            strategy: Strategy::Exhaustive,
-            ..Request::default()
-        })?;
-        let hits: Vec<(String, f64)> = res
-            .results
-            .into_iter()
-            .filter(|h| h.id != *qid)
-            .map(|h| (h.id, (f64::from(h.score) * 1e6).round() / 1e6))
-            .collect();
-        if let Some(w) = &mut out {
-            for (rank, (doc, score)) in hits.iter().enumerate() {
-                writeln!(w, "{qid} Q0 {doc} {} {score:.6} telusur", rank + 1)?;
-            }
-        }
-        run.insert(qid.clone(), hits);
-    }
-    if let Some(mut w) = out {
-        w.flush()?;
-    }
-    let (ndcg_at_10, recall_at_100) = evaluate(&qrels, &run);
+/// The vector of each query: `fbin` rows, named by the lines of `query_ids.txt` next to it.
+pub fn load_query_vectors(fbin: &Path) -> Result<HashMap<String, Vec<f32>>> {
+    let f = Fbin::open(fbin)?;
+    let ids_path = fbin.with_file_name("query_ids.txt");
+    let ids =
+        fs::read_to_string(&ids_path).with_context(|| format!("read {}", ids_path.display()))?;
+    let ids: Vec<&str> = ids.lines().collect();
+    ensure!(
+        ids.len() == f.n,
+        "{} names {} queries, but {} has {} rows",
+        ids_path.display(),
+        ids.len(),
+        fbin.display(),
+        f.n
+    );
+    Ok(ids
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id.to_string(), f.row(i).to_vec()))
+        .collect())
+}
 
-    Ok(Report {
-        dataset: data
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into(),
-        mode: Mode::Keyword,
-        queries: qrels.len(),
-        ndcg_at_10,
-        recall_at_100,
-        seconds: start.elapsed().as_secs_f64(),
-        machine: hardware(),
-    })
+/// Runs the test queries of the BEIR dataset in `data` (corpus.jsonl, queries.jsonl,
+/// qrels/test.tsv) against `index`, in keyword mode, and with `query_vectors` (see
+/// `load_query_vectors`) in neural and hybrid mode too. One report per mode. Optionally
+/// writes each run in TREC format to `run_out` (with `.<mode>` appended when there are
+/// several).
+pub fn beir(
+    index: &Index,
+    data: &Path,
+    query_vectors: Option<&Path>,
+    run_out: Option<&Path>,
+) -> Result<Vec<Report>> {
+    let (qrels, queries) = load_beir(data)?;
+    let vectors = query_vectors.map(load_query_vectors).transpose()?;
+    let modes = match vectors {
+        Some(_) => vec![Mode::Keyword, Mode::Neural, Mode::Hybrid],
+        None => vec![Mode::Keyword],
+    };
+    let several = modes.len() > 1;
+    let mut reports = Vec::new();
+    for mode in modes {
+        let start = Instant::now();
+        let mut run = Run::new();
+        let path = run_out.map(|p| match several {
+            true => PathBuf::from(format!(
+                "{}.{}",
+                p.display(),
+                format!("{mode:?}").to_lowercase()
+            )),
+            false => p.to_path_buf(),
+        });
+        let mut out = path.map(File::create).transpose()?.map(BufWriter::new);
+        for (qid, text) in &queries {
+            let vector = match (&vectors, mode) {
+                (Some(v), Mode::Neural | Mode::Hybrid) => Some(
+                    v.get(qid)
+                        .with_context(|| format!("no query vector for query {qid}"))?
+                        .clone(),
+                ),
+                _ => None,
+            };
+            let res = index.search(&Request {
+                query: text.clone(),
+                mode,
+                k: MAX_K,
+                // At k = 1000 there is little to prune, and exhaustive scores are the reference.
+                strategy: Strategy::Exhaustive,
+                vector,
+                ..Request::default()
+            })?;
+            let hits: Vec<(String, f64)> = res
+                .results
+                .into_iter()
+                .filter(|h| h.id != *qid)
+                .map(|h| (h.id, (f64::from(h.score) * 1e6).round() / 1e6))
+                .collect();
+            if let Some(w) = &mut out {
+                for (rank, (doc, score)) in hits.iter().enumerate() {
+                    writeln!(w, "{qid} Q0 {doc} {} {score:.6} telusur", rank + 1)?;
+                }
+            }
+            run.insert(qid.clone(), hits);
+        }
+        if let Some(mut w) = out {
+            w.flush()?;
+        }
+        let (ndcg_at_10, recall_at_100) = evaluate(&qrels, &run);
+        reports.push(Report {
+            dataset: data
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into(),
+            mode,
+            queries: qrels.len(),
+            ndcg_at_10,
+            recall_at_100,
+            seconds: start.elapsed().as_secs_f64(),
+            machine: hardware(),
+        });
+    }
+    Ok(reports)
 }
