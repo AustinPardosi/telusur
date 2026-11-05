@@ -102,6 +102,15 @@ struct CorpusDoc {
 /// Builds an index in `out` from `corpus` (one JSON doc per line, line order = doc id).
 /// Returns the number of docs.
 pub fn build(corpus: &Path, out: &Path) -> Result<usize> {
+    build_with(corpus, out, |_| {})
+}
+
+/// `build`, letting `inspect` look at the keyword postings before they are written.
+pub fn build_with(
+    corpus: &Path,
+    out: &Path,
+    inspect: impl FnOnce(&keyword::Builder),
+) -> Result<usize> {
     fs::create_dir_all(out)?;
     let file = File::open(corpus).with_context(|| format!("open {}", corpus.display()))?;
     let mut keyword = keyword::Builder::default();
@@ -115,6 +124,7 @@ pub fn build(corpus: &Path, out: &Path) -> Result<usize> {
         docs.add([&d.id, &d.title, &d.url, docstore::snippet(&d.text)])?;
         n += 1;
     }
+    inspect(&keyword);
     keyword.finish(out)?;
     docs.finish(out)?;
     Ok(n)

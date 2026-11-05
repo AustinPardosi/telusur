@@ -66,6 +66,13 @@ enum Bench {
         #[arg(long, value_delimiter = ',', default_value = "1,4,10")]
         threads: Vec<usize>,
     },
+    /// B8: bytes per posting at each step of the posting format; builds the index in --out
+    AblatePostings {
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -151,6 +158,10 @@ fn main() -> Result<()> {
             threads,
         }) => {
             let report = bench::bm25(&Index::open(&index)?, &data, k, &threads)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::AblatePostings { corpus, out }) => {
+            let report = bench::ablate_postings(&corpus, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }

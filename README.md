@@ -45,7 +45,7 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | Recall@10 on 1M OpenAI embeddings                        | TBD at TBD ms p50                     |
 | Hot memory per vector                                    | TBD bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
-| BM25 index size vs naive                                 | TBD smaller                           |
+| BM25 index size vs naive                                 | 87% smaller (BEIR NQ)                 |
 | Postings decoded, MaxScore vs exhaustive                 | 50% fewer on TREC-COVID, same top-10  |
 | Ingest throughput (FineWeb)                              | TBD docs/s (TBD docs/day)             |
 
@@ -154,18 +154,20 @@ MaxScore wins on p50 and throughput everywhere, but loses p99 on long queries (9
 
  
 
-Memory, step by step (like Exa's post):
+Memory, step by step (like Exa's post), on BEIR NQ: 2.68M docs, 118.6M postings, Apple M4 ([B8](bench-results/b8-ablate-postings-2026-11-05.md)). Each row counts postings, dictionary and doc lengths.
 
  
 
 
 | Format                                            | Bytes per posting |
 | ------------------------------------------------- | ----------------- |
-| `HashMap<u32, Vec<(u32, u32)>>`                   | TBD               |
-| + one flat buffer                                 | TBD               |
-| + delta varint doc ids                            | TBD               |
-| + tf tiers                                        | TBD               |
-| + inline singletons, FST dictionary, 1-byte norms | TBD               |
+| `HashMap<String, Vec<(u32, u32)>>`                | 12.69             |
+| + one flat buffer                                 | 8.89              |
+| + delta varint doc ids                            | 6.20              |
+| + tf tiers                                        | 2.42              |
+| + inline singletons, FST dictionary, 1-byte norms | 1.64              |
+
+That is 87% smaller than naive. The delta varint row still keeps a 4-byte tf per posting; against a varint tf, tiers cut postings bytes by 34%.
 
 
  

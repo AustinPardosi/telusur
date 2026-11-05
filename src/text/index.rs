@@ -59,6 +59,24 @@ struct Stats {
     total_len: u64,
 }
 
+/// Bytes one posting format takes for a whole corpus, by part.
+#[derive(Debug, Serialize)]
+pub struct Footprint {
+    pub format: &'static str,
+    pub postings: u64,
+    /// Per-term entries: a hash table, or nothing once the FST holds the offsets.
+    pub term_table: u64,
+    /// The term text: heap strings, or the FST.
+    pub term_strings: u64,
+    pub doc_lengths: u64,
+}
+
+impl Footprint {
+    pub fn total(&self) -> u64 {
+        self.postings + self.term_table + self.term_strings + self.doc_lengths
+    }
+}
+
 // ponytail: every posting list sits in RAM until finish(), which caps a build at a few
 // million FineWeb docs on 16 GB. Segment-and-merge is the upgrade path.
 #[derive(Default)]
@@ -86,6 +104,76 @@ impl Builder {
         self.stats.total_len += len as u64;
     }
 
+    /// Distinct terms held so far.
+    pub fn terms(&self) -> usize {
+        self.terms.len()
+    }
+
+    /// Postings held so far.
+    pub fn postings(&self) -> u64 {
+        self.terms.values().map(|l| l.len() as u64).sum()
+    }
+
+    /// The first four steps of the memory ablation, measured on the postings this builder
+    /// holds. Hash table bytes come from the builder's own map (hashbrown keeps capacity at
+    /// 7/8 of its buckets) plus one control byte per bucket; Vec and String bytes are their
+    /// real capacities; every encoded format is really encoded, term by term. The last step,
+    /// the shipped format, is the size of the files `finish` writes.
+    ///
+    /// Step 3 keeps a u32 tf per posting, so each step changes one thing. Also returns the
+    /// postings bytes of step 3 with a varint tf instead, to show what tiers save over that.
+    pub fn ablation(&self) -> (Vec<Footprint>, u64) {
+        let buckets = (self.terms.capacity() / 7 * 8) as u64;
+        let table = |entry: usize| buckets * (entry as u64 + 1) + 16;
+        let term_strings: u64 = self.terms.keys().map(|t| t.capacity() as u64).sum();
+        let doc_lengths = 4 * self.norms.len() as u64;
+        let step = |format, postings, term_table| Footprint {
+            format,
+            postings,
+            term_table,
+            term_strings,
+            doc_lengths,
+        };
+
+        let (mut naive, mut flat, mut delta, mut delta_varint_tf, mut tiered) = (0, 0, 0, 0, 0);
+        let (mut buf, mut skips, mut enc) = (Vec::new(), Vec::new(), TierEncoder::default());
+        for list in self.terms.values() {
+            naive += 8 * list.capacity() as u64;
+            flat += 8 * list.len() as u64;
+            buf.clear();
+            let mut prev = u32::MAX;
+            for &(doc, _) in list {
+                put_varint(&mut buf, u64::from(doc.wrapping_sub(prev)));
+                prev = doc;
+            }
+            delta += (buf.len() + 4 * list.len()) as u64; // plus a u32 tf per posting
+            for &(_, tf) in list {
+                put_varint(&mut buf, u64::from(tf));
+            }
+            delta_varint_tf += buf.len() as u64;
+            buf.clear();
+            skips.clear();
+            enc.encode(list, &self.norms, &mut buf, &mut skips);
+            tiered += (buf.len() + skips.len()) as u64;
+        }
+        let flat_table = table(size_of::<(String, (u64, u32))>());
+        let steps = vec![
+            step(
+                "HashMap<String, Vec<(u32, u32)>>",
+                naive,
+                table(size_of::<(String, Vec<(u32, u32)>)>()),
+            ),
+            step(
+                "+ one flat buffer, (offset, len) per term",
+                flat,
+                flat_table,
+            ),
+            step("+ delta varint doc ids", delta, flat_table),
+            step("+ tf tiers (with headers and skips)", tiered, flat_table),
+        ];
+        (steps, delta_varint_tf)
+    }
+
     /// Writes the index files into `dir` and returns the number of terms.
     pub fn finish(self, dir: &Path) -> Result<usize> {
         let mut terms: Vec<_> = self.terms.into_iter().collect();
@@ -94,55 +182,14 @@ impl Builder {
         let mut fst = fst::MapBuilder::new(BufWriter::new(File::create(dir.join("terms.fst"))?))?;
         let mut postings = Vec::new();
         let mut skips = Vec::new();
-        let mut data: [Vec<u8>; 16] = Default::default();
-        let mut tier_skips: [Vec<u8>; 16] = Default::default();
+        let mut enc = TierEncoder::default();
         for (term, list) in &terms {
             if let [(doc, tf)] = list[..] {
                 fst.insert(term, SINGLETON | u64::from(tf) << 32 | u64::from(doc))?;
                 continue;
             }
             fst.insert(term, postings.len() as u64)?;
-            let mut prev = [u32::MAX; 16];
-            let mut count = [0u32; 16];
-            let mut min_norm = [u8::MAX; 16];
-            let mut max_tf = 0;
-            for &(doc, tf) in list {
-                let t = if tf <= 15 { tf as usize } else { OVERFLOW };
-                if count[t] > 0 && count[t] % SKIP == 0 {
-                    tier_skips[t].extend(prev[t].to_le_bytes());
-                    tier_skips[t].extend((data[t].len() as u32).to_le_bytes());
-                }
-                put_varint(&mut data[t], u64::from(doc.wrapping_sub(prev[t])));
-                if t == OVERFLOW {
-                    put_varint(&mut data[t], u64::from(tf));
-                    max_tf = max_tf.max(tf);
-                }
-                prev[t] = doc;
-                count[t] += 1;
-                min_norm[t] = min_norm[t].min(self.norms[doc as usize]);
-            }
-            put_varint(&mut postings, list.len() as u64);
-            let bitset = TIERS
-                .iter()
-                .filter(|&&t| count[t] > 0)
-                .fold(0u16, |m, &t| m | 1 << t);
-            postings.extend(bitset.to_le_bytes());
-            for t in TIERS {
-                if count[t] == 0 {
-                    continue;
-                }
-                put_varint(&mut postings, u64::from(count[t]));
-                put_varint(&mut postings, data[t].len() as u64);
-                postings.push(min_norm[t]);
-                if t == OVERFLOW {
-                    put_varint(&mut postings, u64::from(max_tf));
-                }
-                if count[t] > SKIP {
-                    put_varint(&mut postings, skips.len() as u64 / 8);
-                    skips.append(&mut tier_skips[t]);
-                }
-                postings.append(&mut data[t]);
-            }
+            enc.encode(list, &self.norms, &mut postings, &mut skips);
         }
         fst.finish()?;
         fs::write(dir.join("postings.bin"), postings)?;
@@ -150,6 +197,67 @@ impl Builder {
         fs::write(dir.join("norms.bin"), &self.norms)?;
         fs::write(dir.join("keyword.json"), serde_json::to_vec(&self.stats)?)?;
         Ok(terms.len())
+    }
+}
+
+/// Writes one term's posting list in the tiered format: `varint df`, the tier bitset, then
+/// each tier's header and data. Keeps its per-tier buffers between terms.
+#[derive(Default)]
+struct TierEncoder {
+    data: [Vec<u8>; 16],
+    skips: [Vec<u8>; 16],
+}
+
+impl TierEncoder {
+    fn encode(
+        &mut self,
+        list: &[(u32, u32)],
+        norms: &[u8],
+        postings: &mut Vec<u8>,
+        skips: &mut Vec<u8>,
+    ) {
+        let (data, tier_skips) = (&mut self.data, &mut self.skips);
+        let mut prev = [u32::MAX; 16];
+        let mut count = [0u32; 16];
+        let mut min_norm = [u8::MAX; 16];
+        let mut max_tf = 0;
+        for &(doc, tf) in list {
+            let t = if tf <= 15 { tf as usize } else { OVERFLOW };
+            if count[t] > 0 && count[t] % SKIP == 0 {
+                tier_skips[t].extend(prev[t].to_le_bytes());
+                tier_skips[t].extend((data[t].len() as u32).to_le_bytes());
+            }
+            put_varint(&mut data[t], u64::from(doc.wrapping_sub(prev[t])));
+            if t == OVERFLOW {
+                put_varint(&mut data[t], u64::from(tf));
+                max_tf = max_tf.max(tf);
+            }
+            prev[t] = doc;
+            count[t] += 1;
+            min_norm[t] = min_norm[t].min(norms[doc as usize]);
+        }
+        put_varint(postings, list.len() as u64);
+        let bitset = TIERS
+            .iter()
+            .filter(|&&t| count[t] > 0)
+            .fold(0u16, |m, &t| m | 1 << t);
+        postings.extend(bitset.to_le_bytes());
+        for t in TIERS {
+            if count[t] == 0 {
+                continue;
+            }
+            put_varint(postings, u64::from(count[t]));
+            put_varint(postings, data[t].len() as u64);
+            postings.push(min_norm[t]);
+            if t == OVERFLOW {
+                put_varint(postings, u64::from(max_tf));
+            }
+            if count[t] > SKIP {
+                put_varint(postings, skips.len() as u64 / 8);
+                skips.append(&mut tier_skips[t]);
+            }
+            postings.append(&mut data[t]);
+        }
     }
 }
 

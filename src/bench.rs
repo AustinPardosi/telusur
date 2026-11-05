@@ -1,14 +1,14 @@
 //! Speed benchmarks. Every report names the machine it ran on.
 
 use crate::{
-    engine::{Index, Mode, Request, Response, Strategy},
+    engine::{self, Index, Mode, Request, Response, Strategy},
     eval::load_beir,
-    text::analyzer::analyze,
+    text::{analyzer::analyze, index::Footprint},
     util::{hardware, percentile},
 };
 use anyhow::Result;
 use serde::Serialize;
-use std::{collections::BTreeMap, path::Path, thread, time::Instant};
+use std::{collections::BTreeMap, fs, path::Path, thread, time::Instant};
 
 /// Latency is measured over at least this many queries, cycling through the query set.
 const MIN_TIMED: usize = 1000;
@@ -146,5 +146,73 @@ pub fn bm25(index: &Index, data: &Path, k: usize, threads: &[usize]) -> Result<B
         mismatched_queries,
         machine: hardware(),
         strategies,
+    })
+}
+
+#[derive(Serialize)]
+pub struct AblationReport {
+    pub bench: &'static str,
+    pub corpus: String,
+    pub docs: usize,
+    pub terms: usize,
+    pub postings: u64,
+    pub steps: Vec<AblationStep>,
+    /// Final format's total over the naive one's.
+    pub final_vs_naive: f64,
+    pub at_least_50_percent_smaller: bool,
+    /// Postings bytes of the delta varint step if tf were a varint too, not a u32.
+    pub delta_varint_tf_postings: u64,
+    pub machine: String,
+}
+
+#[derive(Serialize)]
+pub struct AblationStep {
+    #[serde(flatten)]
+    pub footprint: Footprint,
+    pub total: u64,
+    pub bytes_per_posting: f64,
+}
+
+/// B8: bytes per posting at each step of the posting format, like the memory story in Exa's
+/// BM25 post. Builds the index in `out`; the last step is the size of its files.
+pub fn ablate_postings(corpus: &Path, out: &Path) -> Result<AblationReport> {
+    let mut seen = None;
+    let docs = engine::build_with(corpus, out, |b| {
+        seen = Some((b.ablation(), b.terms(), b.postings()))
+    })?;
+    let ((mut footprints, delta_varint_tf_postings), terms, postings) =
+        seen.expect("build_with always inspects");
+    let size = |f: &str| fs::metadata(out.join(f)).map(|m| m.len());
+    footprints.push(Footprint {
+        format: "+ inline singletons, FST dictionary, 1-byte norms (the index files)",
+        postings: size("postings.bin")? + size("skips.bin")?,
+        term_table: 0,
+        term_strings: size("terms.fst")?,
+        doc_lengths: size("norms.bin")?,
+    });
+    let final_vs_naive =
+        footprints[footprints.len() - 1].total() as f64 / footprints[0].total() as f64;
+    let steps = footprints
+        .into_iter()
+        .map(|footprint| {
+            let total = footprint.total();
+            AblationStep {
+                footprint,
+                total,
+                bytes_per_posting: total as f64 / postings as f64,
+            }
+        })
+        .collect();
+    Ok(AblationReport {
+        bench: "ablate-postings",
+        corpus: corpus.display().to_string(),
+        docs,
+        terms,
+        postings,
+        steps,
+        final_vs_naive,
+        at_least_50_percent_smaller: final_vs_naive <= 0.5,
+        delta_varint_tf_postings,
+        machine: hardware(),
     })
 }

@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 use telusur::{
+    bench,
     engine::{self, Index, Mode, Request, Response, Strategy},
     synth,
 };
@@ -259,4 +260,26 @@ fn modes_limits_and_ties() {
         search(&index, "same", Mode::Keyword, 1).unwrap().results[0].id,
         "b"
     );
+}
+
+#[test]
+fn ablation_tier_step_is_the_real_encoding() {
+    // Every term in two or more docs, so there are no singletons to inline and the tiers step
+    // must take exactly the bytes of the postings files.
+    let docs: Vec<Value> = (0..300)
+        .map(|i| json!({ "id": format!("d{i}"), "text": format!("common words {} more{}", "shared ".repeat(i % 20 + 1), i % 7) }))
+        .collect();
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ablation");
+    fs::create_dir_all(&dir).unwrap();
+    let corpus = dir.join("corpus.jsonl");
+    fs::write(
+        &corpus,
+        docs.iter().map(|d| format!("{d}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let report = bench::ablate_postings(&corpus, &dir.join("index")).unwrap();
+    let steps = &report.steps;
+    assert_eq!(steps.len(), 5);
+    assert_eq!(steps[3].footprint.postings, steps[4].footprint.postings);
+    assert!(steps.windows(2).all(|w| w[1].total < w[0].total));
 }

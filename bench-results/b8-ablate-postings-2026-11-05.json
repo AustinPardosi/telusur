@@ -1,0 +1,58 @@
+{
+  "bench": "ablate-postings",
+  "corpus": "data/nq/corpus.jsonl",
+  "docs": 2681468,
+  "terms": 996981,
+  "postings": 118649493,
+  "steps": [
+    {
+      "format": "HashMap<String, Vec<(u32, u32)>>",
+      "postings": 1384299552,
+      "term_table": 102760464,
+      "term_strings": 8466839,
+      "doc_lengths": 10725872,
+      "total": 1506252727,
+      "bytes_per_posting": 12.694978199359015
+    },
+    {
+      "format": "+ one flat buffer, (offset, len) per term",
+      "postings": 949195944,
+      "term_table": 85983248,
+      "term_strings": 8466839,
+      "doc_lengths": 10725872,
+      "total": 1054371903,
+      "bytes_per_posting": 8.886442548894836
+    },
+    {
+      "format": "+ delta varint doc ids",
+      "postings": 630181466,
+      "term_table": 85983248,
+      "term_strings": 8466839,
+      "doc_lengths": 10725872,
+      "total": 735357425,
+      "bytes_per_posting": 6.197729180351407
+    },
+    {
+      "format": "+ tf tiers (with headers and skips)",
+      "postings": 182256965,
+      "term_table": 85983248,
+      "term_strings": 8466839,
+      "doc_lengths": 10725872,
+      "total": 287432924,
+      "bytes_per_posting": 2.4225381561470303
+    },
+    {
+      "format": "+ inline singletons, FST dictionary, 1-byte norms (the index files)",
+      "postings": 177270386,
+      "term_table": 0,
+      "term_strings": 15118001,
+      "doc_lengths": 2681468,
+      "total": 195069855,
+      "bytes_per_posting": 1.6440850278222428
+    }
+  ],
+  "final_vs_naive": 0.1295067232100686,
+  "at_least_50_percent_smaller": true,
+  "delta_varint_tf_postings": 274232991,
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+}
