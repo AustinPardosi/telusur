@@ -4,7 +4,8 @@ use crate::{
     engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     eval::load_beir,
     text::{analyzer::analyze, index::Footprint},
-    util::{hardware, percentile},
+    util::{Fbin, hardware, percentile},
+    vector::{ivf::VectorIndex, kernel::Kernel},
 };
 use anyhow::Result;
 use serde::Serialize;
@@ -215,5 +216,126 @@ pub fn ablate_postings(corpus: &Path, out: &Path) -> Result<AblationReport> {
         at_least_50_percent_smaller: final_vs_naive <= 0.5,
         delta_varint_tf_postings,
         machine: hardware(),
+    })
+}
+
+#[derive(Serialize)]
+pub struct AnnReport {
+    pub bench: &'static str,
+    pub index: String,
+    pub nlist: usize,
+    pub k: usize,
+    pub queries: usize,
+    pub timed_queries: usize,
+    pub kernel: Kernel,
+    pub machine: String,
+    pub runs: Vec<AnnRun>,
+}
+
+#[derive(Serialize)]
+pub struct AnnRun {
+    pub nprobe: usize,
+    pub rerank_depth: usize,
+    /// Recall@k against the exact top k by full vectors and by rerank vectors.
+    pub recall_full: f64,
+    pub recall_rerank: f64,
+    pub codes_scanned_mean: f64,
+    /// Route, scan and rerank, one thread.
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub mean_ms: f64,
+    pub qps: BTreeMap<usize, f64>,
+}
+
+/// B3: recall against both ground truths, latency and QPS for every pair of clusters probed
+/// and rerank depth, on the vector part of the index in `dir`.
+pub fn ann(
+    dir: &Path,
+    queries: &Fbin,
+    gt: [&[Vec<u32>]; 2],
+    nprobes: &[usize],
+    depths: &[usize],
+    threads: &[usize],
+) -> Result<AnnReport> {
+    const K: usize = 10;
+    let index = VectorIndex::open(dir)?
+        .ok_or_else(|| anyhow::anyhow!("{} has no vectors", dir.display()))?;
+    let kernel = Kernel::default_for_process()?;
+    let qs: Vec<&[f32]> = (0..queries.n).map(|i| queries.row(i)).collect();
+    anyhow::ensure!(
+        gt.iter().all(|g| g.len() == qs.len()),
+        "ground truth rows must match the queries"
+    );
+    let timed = qs.len() * MIN_TIMED.div_ceil(qs.len().max(1));
+    let recall = |hits: &[(u32, f32)], truth: &[u32]| {
+        hits.iter()
+            .filter(|(d, _)| truth[..K.min(truth.len())].contains(d))
+            .count() as f64
+            / K as f64
+    };
+
+    let mut runs = Vec::new();
+    for &nprobe in nprobes {
+        for &depth in depths {
+            let search = |q: &[f32]| index.search(q, K, depth, nprobe, kernel);
+            let (mut recall_full, mut recall_rerank, mut scanned) = (0.0, 0.0, 0.0);
+            for (i, q) in qs.iter().enumerate() {
+                let (hits, trace) = search(q)?;
+                recall_full += recall(&hits, &gt[0][i]);
+                recall_rerank += recall(&hits, &gt[1][i]);
+                scanned += trace.codes_scanned as f64;
+            }
+            let mut lat = Vec::with_capacity(timed);
+            for q in qs.iter().cycle().take(timed) {
+                let start = Instant::now();
+                search(q)?;
+                lat.push(start.elapsed().as_secs_f64() * 1e3);
+            }
+            lat.sort_by(f64::total_cmp);
+            let mut qps = BTreeMap::new();
+            for &n in threads {
+                let start = Instant::now();
+                thread::scope(|s| {
+                    let workers: Vec<_> = (0..n)
+                        .map(|t| {
+                            let (qs, search) = (&qs, &search);
+                            s.spawn(move || -> Result<()> {
+                                for i in (t..timed).step_by(n) {
+                                    search(qs[i % qs.len()])?;
+                                }
+                                Ok(())
+                            })
+                        })
+                        .collect();
+                    workers
+                        .into_iter()
+                        .try_for_each(|w| w.join().expect("bench thread panicked"))
+                })?;
+                qps.insert(n, timed as f64 / start.elapsed().as_secs_f64());
+            }
+            let n = qs.len() as f64;
+            runs.push(AnnRun {
+                nprobe,
+                rerank_depth: depth,
+                recall_full: recall_full / n,
+                recall_rerank: recall_rerank / n,
+                codes_scanned_mean: scanned / n,
+                p50_ms: percentile(&lat, 50.0),
+                p99_ms: percentile(&lat, 99.0),
+                mean_ms: lat.iter().sum::<f64>() / lat.len() as f64,
+                qps,
+            });
+        }
+    }
+    Ok(AnnReport {
+        bench: "ann",
+        index: dir.display().to_string(),
+        nlist: index.nlist(),
+        k: K,
+        queries: qs.len(),
+        timed_queries: timed,
+        kernel,
+        machine: hardware(),
+        runs,
     })
 }

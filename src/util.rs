@@ -67,6 +67,40 @@ impl Fbin {
     }
 }
 
+/// Writes rows of `k` ids as an `.ibin` file (`u32 n, u32 k`, then n x k little-endian u32),
+/// the ground truth format.
+pub fn write_ibin(path: &Path, k: usize, rows: &[Vec<u32>]) -> Result<()> {
+    let mut w = BufWriter::new(File::create(path)?);
+    w.write_all(&(rows.len() as u32).to_le_bytes())?;
+    w.write_all(&(k as u32).to_le_bytes())?;
+    for row in rows {
+        ensure!(row.len() == k, "row of {} ids in a k = {k} file", row.len());
+        w.write_all(bytemuck::cast_slice(row))?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+/// Reads an `.ibin` file into rows.
+pub fn read_ibin(path: &Path) -> Result<Vec<Vec<u32>>> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    ensure!(bytes.len() >= 8, "{} has no .ibin header", path.display());
+    let n = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+    let k = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    ensure!(
+        bytes.len() == 8 + n * k * 4,
+        "{} should hold {n} x {k} ids",
+        path.display()
+    );
+    let ids: Vec<u32> = bytes[8..]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| u32::from_le_bytes(b))
+        .collect();
+    Ok(ids.chunks(k.max(1)).map(<[u32]>::to_vec).collect())
+}
+
 /// Writes rows of `d` floats as a `.fbin` file.
 pub fn write_fbin(
     path: &Path,

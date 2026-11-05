@@ -8,6 +8,7 @@ pub mod util;
 pub mod vector {
     pub mod ivf;
     pub mod kernel;
+    pub mod kmeans;
     pub mod quant;
 }
 

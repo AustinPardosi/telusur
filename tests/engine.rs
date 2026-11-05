@@ -5,7 +5,7 @@ use telusur::{
     engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     synth,
     util::Fbin,
-    vector::kernel::Kernel,
+    vector::{kernel::Kernel, kmeans},
 };
 
 fn build(name: &str, docs: &[Value]) -> Index {
@@ -301,6 +301,7 @@ fn vector_index(name: &str, n: usize, dims: usize) -> (Index, Vec<Vec<f32>>, Vec
         vectors: Some(dir.join("base.fbin")),
         d_code: dims.min(256),
         d_rerank: None,
+        nlist: None,
     };
     engine::build(&dir.join("corpus.jsonl"), &dir.join("index"), &opts).unwrap();
     let rows = |f: Fbin| (0..f.n).map(|i| f.row(i).to_vec()).collect::<Vec<_>>();
@@ -320,17 +321,29 @@ fn neural(index: &Index, q: &[f32], k: usize) -> anyhow::Result<Response> {
 
 #[test]
 fn neural_recall_against_exact_search() {
-    // 512-dim vectors: 256-dim codes for the first stage, all 512 dims to rerank.
+    // 512-dim vectors: 256-dim codes for the first stage, all 512 dims to rerank. 20,000 docs
+    // make 256 clusters, of which the default probes 32.
     let (index, base, queries) = vector_index("neural_recall", 20_000, 512);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("neural_recall");
+    let (base_f, query_f) = (
+        Fbin::open(&dir.join("base.fbin")).unwrap(),
+        Fbin::open(&dir.join("queries.fbin")).unwrap(),
+    );
+    let gt = kmeans::ground_truth(&base_f, &query_f, 512, 10);
     let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
     let mut found = 0;
-    for q in &queries {
+    for (q, gt) in queries.iter().zip(&gt) {
+        // The chunked, parallel ground truth equals a plain sort.
         let mut exact: Vec<(usize, f32)> = base.iter().map(|v| dot(v, q)).enumerate().collect();
-        exact.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let truth: BTreeSet<String> = exact[..10]
-            .iter()
-            .map(|(i, _)| format!("synth-{i}"))
-            .collect();
+        exact.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        assert_eq!(
+            gt,
+            &exact[..10]
+                .iter()
+                .map(|&(i, _)| i as u32)
+                .collect::<Vec<_>>()
+        );
+        let truth: BTreeSet<String> = gt.iter().map(|i| format!("synth-{i}")).collect();
         let res = neural(&index, q, 10).unwrap();
         assert_eq!(res.results.len(), 10);
         found += res.results.iter().filter(|h| truth.contains(&h.id)).count();
@@ -417,5 +430,47 @@ fn every_kernel_returns_identical_results() {
         for kernel in Kernel::available() {
             assert_eq!(run(kernel), want, "{kernel:?}");
         }
+    }
+}
+
+#[test]
+fn probing_every_cluster_equals_one_cluster() {
+    let (clustered, _, queries) = vector_index("all_clusters", 5_000, 256);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("all_clusters");
+    let opts = BuildOptions {
+        vectors: Some(dir.join("base.fbin")),
+        nlist: Some(1),
+        ..BuildOptions::default()
+    };
+    engine::build(&dir.join("corpus.jsonl"), &dir.join("one"), &opts).unwrap();
+    let one = Index::open(&dir.join("one")).unwrap();
+    let run = |index: &Index, q: &[f32], nprobe| {
+        let req = Request {
+            mode: Mode::Neural,
+            k: 20,
+            vector: Some(q.to_vec()),
+            nprobe: Some(nprobe),
+            debug: true,
+            ..Request::default()
+        };
+        index.search(&req).unwrap()
+    };
+    for q in &queries {
+        let all = run(&clustered, q, 1 << 20);
+        let single = run(&one, q, 1);
+        let ids = |r: &Response| {
+            r.results
+                .iter()
+                .map(|h| (h.id.clone(), h.score.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&all), ids(&single));
+        let (a, b) = (all.stats.unwrap(), single.stats.unwrap());
+        assert_eq!(a.clusters_probed, Some(128)); // default for 5,000 docs: 2 x 70.7, rounded
+        assert_eq!(b.clusters_probed, Some(1));
+        assert!(
+            a.codes_scanned >= b.codes_scanned,
+            "more clusters, more padding"
+        );
     }
 }

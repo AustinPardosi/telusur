@@ -5,8 +5,8 @@ use telusur::{
     bench,
     engine::{self, BuildOptions, Index, Mode, Request, Strategy},
     eval, synth,
-    util::Fbin,
-    vector::kernel::Kernel,
+    util::{Fbin, read_ibin, write_ibin},
+    vector::{kernel::Kernel, kmeans},
 };
 
 #[derive(Parser)]
@@ -37,6 +37,25 @@ enum Cmd {
         /// Dims kept as the f16 rerank vector [default: the smaller of 1024 and the dims]
         #[arg(long)]
         d_rerank: Option<usize>,
+        /// Clusters [default: about 2 x sqrt(docs), rounded to a power of two]
+        #[arg(long)]
+        nlist: Option<usize>,
+    },
+    /// Exact ground truth: the top k base rows per query by full vectors (gt_full.ibin) and
+    /// by rerank vectors (gt_rerank.ibin)
+    Gt {
+        #[arg(long)]
+        base: PathBuf,
+        #[arg(long)]
+        queries: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        k: usize,
+        /// Rerank dims, as given to `index` [default: the smaller of 1024 and the dims]
+        #[arg(long)]
+        d_rerank: Option<usize>,
+        /// Directory to write the two .ibin files to
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Search an index and print the response as JSON
     Search {
@@ -51,9 +70,12 @@ enum Cmd {
         /// Row of --query-vectors to use
         #[arg(long, default_value_t = 0)]
         query_row: usize,
-        /// How many of the best codes neural search rescores exactly
+        /// How many of the best codes neural search rescores exactly (0: no rerank)
         #[arg(long, default_value_t = 200)]
         rerank_depth: usize,
+        /// Clusters neural search probes [default: 32]
+        #[arg(long)]
+        nprobe: Option<usize>,
         /// Debug option: scoring kernel [default: TELUSUR_KERNEL, else the fastest]
         #[arg(long, value_enum)]
         kernel: Option<Kernel>,
@@ -97,6 +119,24 @@ enum Bench {
         corpus: PathBuf,
         #[arg(long)]
         out: PathBuf,
+    },
+    /// B3: neural recall@10, latency and QPS over clusters probed x rerank depth
+    Ann {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        queries: PathBuf,
+        #[arg(long)]
+        gt_full: PathBuf,
+        #[arg(long)]
+        gt_rerank: PathBuf,
+        #[arg(long, value_delimiter = ',', default_value = "8,16,32,64,128")]
+        nprobe: Vec<usize>,
+        #[arg(long, value_delimiter = ',', default_value = "0,100,200,500")]
+        rerank_depth: Vec<usize>,
+        /// Thread counts to measure QPS at
+        #[arg(long, value_delimiter = ',', default_value = "4,10")]
+        threads: Vec<usize>,
     },
 }
 
@@ -178,22 +218,46 @@ fn main() -> Result<()> {
             vectors,
             d_code,
             d_rerank,
+            nlist,
         } => {
             let start = Instant::now();
-            let n = engine::build(
-                &corpus,
-                &out,
-                &BuildOptions {
-                    vectors,
-                    d_code,
-                    d_rerank,
-                },
-            )?;
+            let opts = BuildOptions {
+                vectors,
+                d_code,
+                d_rerank,
+                nlist,
+            };
+            let n = engine::build(&corpus, &out, &opts)?;
             println!(
                 "indexed {n} docs into {} in {:.1}s",
                 out.display(),
                 start.elapsed().as_secs_f64()
             );
+            memory_report(&out, n)?;
+        }
+        Cmd::Gt {
+            base,
+            queries,
+            k,
+            d_rerank,
+            out,
+        } => {
+            let (base, queries) = (Fbin::open(&base)?, Fbin::open(&queries)?);
+            std::fs::create_dir_all(&out)?;
+            let d_rerank = d_rerank.unwrap_or(base.d.min(1024));
+            for (name, dims) in [("gt_full.ibin", base.d), ("gt_rerank.ibin", d_rerank)] {
+                let start = Instant::now();
+                write_ibin(
+                    &out.join(name),
+                    k,
+                    &kmeans::ground_truth(&base, &queries, dims, k),
+                )?;
+                println!(
+                    "wrote {} ({dims} dims) in {:.1}s",
+                    out.join(name).display(),
+                    start.elapsed().as_secs_f64()
+                );
+            }
         }
         Cmd::Search {
             index,
@@ -201,6 +265,7 @@ fn main() -> Result<()> {
             query_vectors,
             query_row,
             rerank_depth,
+            nprobe,
             kernel,
             k,
             mode,
@@ -223,6 +288,7 @@ fn main() -> Result<()> {
                 vector,
                 rerank_depth,
                 kernel,
+                nprobe,
             };
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);
@@ -243,6 +309,56 @@ fn main() -> Result<()> {
         Cmd::Bench(Bench::AblatePostings { corpus, out }) => {
             let report = bench::ablate_postings(&corpus, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::Ann {
+            index,
+            queries,
+            gt_full,
+            gt_rerank,
+            nprobe,
+            rerank_depth,
+            threads,
+        }) => {
+            let gt = [read_ibin(&gt_full)?, read_ibin(&gt_rerank)?];
+            let report = bench::ann(
+                &index,
+                &Fbin::open(&queries)?,
+                [&gt[0], &gt[1]],
+                &nprobe,
+                &rerank_depth,
+                &threads,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+    }
+    Ok(())
+}
+
+/// Bytes per part of the index in `dir`, total and per doc. Every part is memory-mapped
+/// or read whole, so file size is memory size.
+fn memory_report(dir: &std::path::Path, docs: usize) -> Result<()> {
+    const PARTS: [(&str, &str); 12] = [
+        ("codes.bin", "1-bit codes (hot)"),
+        ("ids.bin", "doc id per code slot (hot)"),
+        ("centroids.f32", "centroids"),
+        ("clusters.bin", "cluster offsets"),
+        ("rerank.f16", "f16 rerank vectors (cold)"),
+        ("postings.bin", "postings"),
+        ("skips.bin", "skip entries"),
+        ("terms.fst", "term dictionary"),
+        ("norms.bin", "doc length norms"),
+        ("docs.bin", "doc store"),
+        ("docs.off", "doc store offsets"),
+        ("keyword.json", "keyword stats"),
+    ];
+    println!("{:<28} {:>14} {:>12}", "part", "bytes", "bytes/doc");
+    for (file, part) in PARTS {
+        if let Ok(m) = std::fs::metadata(dir.join(file)) {
+            println!(
+                "{part:<28} {:>14} {:>12.2}",
+                m.len(),
+                m.len() as f64 / docs.max(1) as f64
+            );
         }
     }
     Ok(())

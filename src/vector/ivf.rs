@@ -1,17 +1,22 @@
-//! Neural retrieval index: 1-bit codes in blocks of 32 for the first stage, f16 rerank vectors
-//! for exact scoring. All docs sit in one cluster until clustering lands.
+//! Neural retrieval index: docs split into clusters by spherical k-means on their code-dims
+//! prefix; 1-bit codes in blocks of 32 for the first stage; f16 rerank vectors for exact
+//! scoring. A query scores only the docs in the clusters nearest to it.
 //!
-//! Files: `vectors.json` (dims), `codes.bin` (transposed blocks), `ids.bin` (u32 doc id per
-//! slot, `u32::MAX` for padding), `rerank.f16` (d_rerank f16 per doc, in doc id order).
+//! Files: `vectors.json` (dims, cluster count), `centroids.f32` (nlist x d_code),
+//! `clusters.bin` (nlist + 1 u64 slot offsets), `codes.bin` (each cluster's codes as
+//! transposed blocks, back to back), `ids.bin` (u32 doc id per slot, `u32::MAX` for padding),
+//! `rerank.f16` (d_rerank f16 per doc, in doc id order).
 
 use super::{
     kernel::{BLOCK, Kernel, QueryLut, pack_blocks, scan},
-    quant::{binarize, dot_f16, truncate_normalize},
+    kmeans,
+    quant::{binarize, dot, dot_f16, truncate_normalize},
 };
 use crate::util::{Fbin, MmapSlice, TopK, mmap};
 use anyhow::{Result, ensure};
 use half::f16;
 use memmap2::Mmap;
+use rand::{SeedableRng, rngs::StdRng, seq::index::sample};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -21,6 +26,11 @@ use std::{
 };
 
 const PADDING: u32 = u32::MAX;
+/// Clusters probed when a request does not say.
+pub const DEFAULT_NPROBE: usize = 32;
+/// k-means trains on this many sample points per cluster, for this many rounds.
+const SAMPLE_PER_CLUSTER: usize = 64;
+const ITERS: usize = 12;
 
 #[derive(Serialize, Deserialize)]
 struct Meta {
@@ -28,10 +38,24 @@ struct Meta {
     dims: usize,
     d_code: usize,
     d_rerank: usize,
+    nlist: usize,
+}
+
+/// About 2 x sqrt(n), rounded to the nearest power of two (2048 for 1M docs).
+pub fn default_nlist(n: usize) -> usize {
+    let target = 2.0 * (n.max(1) as f64).sqrt();
+    1 << target.log2().round() as u32
 }
 
 /// Builds the vector files in `out`, one row of `vectors` per doc.
-pub fn build(vectors: &Fbin, out: &Path, d_code: usize, d_rerank: Option<usize>) -> Result<()> {
+pub fn build(
+    vectors: &Fbin,
+    out: &Path,
+    d_code: usize,
+    d_rerank: Option<usize>,
+    nlist: Option<usize>,
+) -> Result<()> {
+    let n = vectors.n;
     let d_rerank = d_rerank.unwrap_or(vectors.d.min(1024));
     // u16 sums of 255 per group overflow past 1024 dims (256 groups x 255 = 65,280).
     ensure!(
@@ -48,9 +72,11 @@ pub fn build(vectors: &Fbin, out: &Path, d_code: usize, d_rerank: Option<usize>)
         "rerank dims must be 1 to {}; got {d_rerank}",
         vectors.d
     );
+    let nlist = nlist.unwrap_or_else(|| default_nlist(n)).clamp(1, n.max(1));
 
+    // Codes in doc order, and rerank vectors streamed to disk.
     let bytes = d_code / 8;
-    let mut codes = vec![0u8; vectors.n * bytes];
+    let mut codes = vec![0u8; n * bytes];
     let mut rerank = BufWriter::new(File::create(out.join("rerank.f16"))?);
     for (i, code) in codes.chunks_exact_mut(bytes).enumerate() {
         let v = vectors.row(i);
@@ -62,16 +88,46 @@ pub fn build(vectors: &Fbin, out: &Path, d_code: usize, d_rerank: Option<usize>)
         rerank.write_all(bytemuck::cast_slice(&r))?;
     }
     rerank.flush()?;
-    fs::write(out.join("codes.bin"), pack_blocks(&codes, bytes))?;
-    let slots = vectors.n.div_ceil(BLOCK) * BLOCK;
-    let ids: Vec<u32> = (0..slots as u32)
-        .map(|i| if (i as usize) < vectors.n { i } else { PADDING })
-        .collect();
+
+    // Clusters: train on a sample of the code-dims prefixes, then assign every doc.
+    let prefix = |i: usize| truncate_normalize(vectors.row(i), d_code);
+    let (centroids, assigned) = if nlist == 1 {
+        (vec![0f32; d_code], vec![0u32; n])
+    } else {
+        let mut rng = StdRng::seed_from_u64(42);
+        let picks = sample(&mut rng, n, (SAMPLE_PER_CLUSTER * nlist).min(n));
+        let train: Vec<f32> = picks.into_iter().flat_map(prefix).collect();
+        let centroids = kmeans::train(&train, d_code, nlist, ITERS, &mut rng);
+        let assigned = kmeans::assign(n, d_code, prefix, &centroids);
+        (centroids, assigned)
+    };
+
+    // Lay clusters out back to back, each padded to whole blocks; docs in id order inside.
+    let mut members = vec![Vec::new(); nlist];
+    for (doc, &c) in assigned.iter().enumerate() {
+        members[c as usize].push(doc as u32);
+    }
+    let (mut blocks, mut ids, mut offsets) = (Vec::new(), Vec::new(), vec![0u64]);
+    for docs in &members {
+        let cluster: Vec<u8> = docs
+            .iter()
+            .flat_map(|&d| &codes[d as usize * bytes..][..bytes])
+            .copied()
+            .collect();
+        blocks.extend(pack_blocks(&cluster, bytes));
+        ids.extend(docs);
+        ids.resize(ids.len().div_ceil(BLOCK) * BLOCK, PADDING);
+        offsets.push(ids.len() as u64);
+    }
+    fs::write(out.join("codes.bin"), blocks)?;
     fs::write(out.join("ids.bin"), bytemuck::cast_slice(&ids))?;
+    fs::write(out.join("clusters.bin"), bytemuck::cast_slice(&offsets))?;
+    fs::write(out.join("centroids.f32"), bytemuck::cast_slice(&centroids))?;
     let meta = Meta {
         dims: vectors.d,
         d_code,
         d_rerank,
+        nlist,
     };
     fs::write(out.join("vectors.json"), serde_json::to_vec(&meta)?)?;
     Ok(())
@@ -79,16 +135,21 @@ pub fn build(vectors: &Fbin, out: &Path, d_code: usize, d_rerank: Option<usize>)
 
 pub struct VectorIndex {
     meta: Meta,
+    centroids: MmapSlice<f32>,
+    offsets: MmapSlice<u64>,
     codes: Mmap,
     ids: MmapSlice<u32>,
     rerank: MmapSlice<f16>,
 }
 
-/// Milliseconds per stage of one neural search.
-pub struct StageTimes {
+/// What one neural search did.
+pub struct Trace {
     pub route: f64,
     pub scan: f64,
     pub rerank: f64,
+    pub clusters_probed: usize,
+    /// Slots scanned, padding included: the kernel's work.
+    pub codes_scanned: usize,
 }
 
 impl VectorIndex {
@@ -99,68 +160,110 @@ impl VectorIndex {
         };
         Ok(Some(Self {
             meta: serde_json::from_slice(&meta)?,
+            centroids: MmapSlice::open(&dir.join("centroids.f32"))?,
+            offsets: MmapSlice::open(&dir.join("clusters.bin"))?,
             codes: mmap(&dir.join("codes.bin"))?,
             ids: MmapSlice::open(&dir.join("ids.bin"))?,
             rerank: MmapSlice::open(&dir.join("rerank.f16"))?,
         }))
     }
 
-    /// Top k (doc, score) for a full query vector: scan the codes with `kernel`, keep the
-    /// `rerank_depth` best (at least k), then score those exactly with rerank vectors. Ties go
-    /// to the smaller doc id.
+    pub fn nlist(&self) -> usize {
+        self.meta.nlist
+    }
+
+    /// Top k (doc, score) for a full query vector. Route: the `nprobe` clusters whose
+    /// centroids best match the query. Scan: score their codes with `kernel`, best cluster
+    /// first so the threshold rises early, keeping the `rerank_depth` best (at least k).
+    /// Rerank: score those exactly with rerank vectors. A rerank depth of 0 skips the rerank
+    /// and returns code scores. Ties go to the smaller doc id.
     pub fn search(
         &self,
         query: &[f32],
         k: usize,
         rerank_depth: usize,
+        nprobe: usize,
         kernel: Kernel,
-    ) -> Result<(Vec<(u32, f32)>, StageTimes)> {
+    ) -> Result<(Vec<(u32, f32)>, Trace)> {
         let Meta {
             dims,
             d_code,
             d_rerank,
+            nlist,
         } = self.meta;
         ensure!(
             query.len() == dims,
             "the query vector has {} dims; the index was built from {dims}",
             query.len()
         );
+        ensure!(nprobe >= 1, "probe at least one cluster");
 
         let t = Instant::now();
-        let ids = self.ids.as_slice(); // one cluster: every slot
+        let q = truncate_normalize(query, d_code);
+        let mut nearest = TopK::new(nprobe.min(nlist));
+        for (c, centroid) in self.centroids.as_slice().chunks_exact(d_code).enumerate() {
+            nearest.push(c as u32, dot(centroid, &q));
+        }
+        let probe = nearest.into_sorted();
         let route = ms(t);
 
         let t = Instant::now();
-        let lut = QueryLut::new(&truncate_normalize(query, d_code));
-        let mut scores = vec![0u16; ids.len()];
-        scan(kernel, &lut, &self.codes, &mut scores)?;
-        let mut candidates = TopK::new(rerank_depth.max(k));
+        let lut = QueryLut::new(&q);
+        let (offsets, ids) = (self.offsets.as_slice(), self.ids.as_slice());
+        let mut candidates = TopK::new(if rerank_depth == 0 {
+            k
+        } else {
+            rerank_depth.max(k)
+        });
         let mut min_accept = 0u16;
-        for (&doc, &s) in ids.iter().zip(&scores) {
-            // Cheap compare first; ties may still get in on doc id, so TopK has the last word.
-            if s < min_accept || doc == PADDING {
-                continue;
+        let mut scores = Vec::new();
+        let mut codes_scanned = 0;
+        for &(c, _) in &probe {
+            let (from, to) = (
+                offsets[c as usize] as usize,
+                offsets[c as usize + 1] as usize,
+            );
+            scores.resize(to - from, 0);
+            scan(
+                kernel,
+                &lut,
+                &self.codes[from * d_code / 8..to * d_code / 8],
+                &mut scores,
+            )?;
+            codes_scanned += to - from;
+            for (&doc, &s) in ids[from..to].iter().zip(&scores) {
+                // Cheap compare first; ties may still get in on doc id, so TopK has the last word.
+                if s < min_accept || doc == PADDING {
+                    continue;
+                }
+                candidates.push(doc, f32::from(s));
+                min_accept = candidates.threshold().max(0.0) as u16;
             }
-            candidates.push(doc, f32::from(s));
-            min_accept = candidates.threshold().max(0.0) as u16;
         }
         let scan = ms(t);
 
         let t = Instant::now();
-        let q = truncate_normalize(query, d_rerank);
-        let rerank = self.rerank.as_slice();
-        let mut top = TopK::new(k);
-        for (doc, _) in candidates.into_sorted() {
-            let at = doc as usize * d_rerank;
-            top.push(doc, dot_f16(&rerank[at..at + d_rerank], &q));
-        }
+        let hits = if rerank_depth == 0 {
+            candidates.into_sorted()
+        } else {
+            let q = truncate_normalize(query, d_rerank);
+            let rerank = self.rerank.as_slice();
+            let mut top = TopK::new(k);
+            for (doc, _) in candidates.into_sorted() {
+                let at = doc as usize * d_rerank;
+                top.push(doc, dot_f16(&rerank[at..at + d_rerank], &q));
+            }
+            top.into_sorted()
+        };
         let rerank = ms(t);
         Ok((
-            top.into_sorted(),
-            StageTimes {
+            hits,
+            Trace {
                 route,
                 scan,
                 rerank,
+                clusters_probed: probe.len(),
+                codes_scanned,
             },
         ))
     }
