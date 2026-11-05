@@ -42,8 +42,8 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | -------------------------------------------------------- | ------------------------------------- |
 | Codes scored per second, one core (256-dim, best kernel) | 516M (NEON, Apple M4)                 |
 | Speedup over scalar                                      | 11x (NEON, Apple M4)                  |
-| Recall@10 on 1M OpenAI embeddings                        | TBD at TBD ms p50                     |
-| Hot memory per vector                                    | TBD bytes (vs 12,288 for raw float32) |
+| Recall@10 on 1M OpenAI embeddings                        | 0.952 at 2.1 ms p50 (0.835 vs full)   |
+| Hot memory per vector                                    | 37.2 bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
 | BM25 index size vs naive                                 | 87% smaller (BEIR NQ)                 |
 | Postings decoded, MaxScore vs exhaustive                 | 50% fewer on TREC-COVID, same top-10  |
@@ -268,9 +268,18 @@ Anserini reference: the [BEIR (v1.0.0) flat BM25 regressions](https://github.com
  
 
 
-| nprobe | rerank depth | Recall@10 | p50 | p99 | QPS (4 / 10 threads) |
-| ------ | ------------ | --------- | --- | --- | -------------------- |
-| TBD    | TBD          | TBD       | TBD | TBD | TBD                  |
+DBpedia 1M, OpenAI text-embedding-3-large (3072 dims), 2,048 clusters, 256-dim codes, 1024-dim rerank vectors, Apple M4 ([B3](bench-results/b3-ann-dbpedia-2026-11-05.md), full grid there). Recall@10 against rerank ground truth (exact top 10 at the rerank dims) and full ground truth (at all 3072 dims); latency on one thread.
+
+| Clusters probed | Rerank depth | Recall@10 (rerank / full GT) | p50 ms | p99 ms | QPS (4 / 10 threads) |
+| --------------- | ------------ | ---------------------------- | ------ | ------ | -------------------- |
+| 32              | 0            | 0.457 / 0.441                | 0.43   | 0.47   | 9,954 / 21,680       |
+| 32              | 200          | 0.839 / 0.754                | 0.79   | 0.85   | 5,141 / 7,635        |
+| 128             | 200          | 0.894 / 0.800                | 1.14   | 1.44   | 3,676 / 4,202        |
+| 128             | 500          | 0.932 / 0.821                | 1.69   | 2.52   | 2,426 / 4,014        |
+| 256 (default)   | 500          | 0.952 / 0.835                | 2.09   | 3.27   | 1,941 / 2,784        |
+| 512             | 1000         | 0.976 / 0.849                | 3.61   | 4.59   | 1,093 / 1,737        |
+
+The default of 256 clusters probed is the smallest that reaches 0.95 against rerank ground truth; it needs a rerank depth of 500, because at depth 200 recall stops near 0.92. Against full ground truth recall tops out near 0.85: that is the cost of reranking with 1024 of the 3072 dims. QPS at 10 threads is noisy on a laptop with other apps open.
 
 
  

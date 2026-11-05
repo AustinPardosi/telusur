@@ -73,7 +73,7 @@ enum Cmd {
         /// How many of the best codes neural search rescores exactly (0: no rerank)
         #[arg(long, default_value_t = 200)]
         rerank_depth: usize,
-        /// Clusters neural search probes [default: 32]
+        /// Clusters neural search probes [default: 256, from B3]
         #[arg(long)]
         nprobe: Option<usize>,
         /// Debug option: scoring kernel [default: TELUSUR_KERNEL, else the fastest]

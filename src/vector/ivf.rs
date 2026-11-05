@@ -26,8 +26,10 @@ use std::{
 };
 
 const PADDING: u32 = u32::MAX;
-/// Clusters probed when a request does not say.
-pub const DEFAULT_NPROBE: usize = 32;
+/// Clusters probed when a request does not say: the smallest count that reached recall@10 of
+/// 0.95 against rerank ground truth on DBpedia 1M (B3, bench-results/b3-ann-dbpedia-*), which
+/// it does at rerank depth 500.
+pub const DEFAULT_NPROBE: usize = 256;
 /// k-means trains on this many sample points per cluster, for this many rounds.
 const SAMPLE_PER_CLUSTER: usize = 64;
 const ITERS: usize = 12;

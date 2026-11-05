@@ -53,7 +53,7 @@ pub struct Request {
     pub rerank_depth: usize,
     /// Debug option: the scoring kernel, instead of the process default.
     pub kernel: Option<Kernel>,
-    /// Clusters neural search probes [default: 32, at most all of them].
+    /// Clusters neural search probes [default: 256, from B3; at most all of them].
     pub nprobe: Option<usize>,
 }
 

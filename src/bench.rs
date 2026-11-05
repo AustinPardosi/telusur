@@ -300,7 +300,7 @@ pub fn ann(
                         .map(|t| {
                             let (qs, search) = (&qs, &search);
                             s.spawn(move || -> Result<()> {
-                                for i in (t..timed).step_by(n) {
+                                for i in (t..timed * QPS_PASSES).step_by(n) {
                                     search(qs[i % qs.len()])?;
                                 }
                                 Ok(())
@@ -311,7 +311,10 @@ pub fn ann(
                         .into_iter()
                         .try_for_each(|w| w.join().expect("bench thread panicked"))
                 })?;
-                qps.insert(n, timed as f64 / start.elapsed().as_secs_f64());
+                qps.insert(
+                    n,
+                    (timed * QPS_PASSES) as f64 / start.elapsed().as_secs_f64(),
+                );
             }
             let n = qs.len() as f64;
             runs.push(AnnRun {
