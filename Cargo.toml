@@ -8,8 +8,10 @@ repository = "https://github.com/AustinPardosi/telusur"
 
 [dependencies]
 anyhow = "1.0.104"
+bytemuck = "1.25.2"
 clap = { version = "4", features = ["derive"] }
 fst = "0.4.7"
+half = { version = "2.7.1", features = ["bytemuck"] }
 memmap2 = "0.9.12"
 rand = "0.9"
 rand_distr = "0.5"

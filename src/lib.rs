@@ -5,6 +5,12 @@ pub mod eval;
 pub mod synth;
 pub mod util;
 
+pub mod vector {
+    pub mod ivf;
+    pub mod kernel;
+    pub mod quant;
+}
+
 pub mod text {
     pub mod analyzer;
     pub mod codec;

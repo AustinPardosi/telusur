@@ -1,6 +1,92 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use bytemuck::Pod;
 use memmap2::Mmap;
-use std::{cmp::Ordering, collections::BinaryHeap, fs, fs::File, path::Path, process::Command};
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    fs,
+    fs::File,
+    io::{BufWriter, Write},
+    marker::PhantomData,
+    path::Path,
+    process::Command,
+};
+
+/// A memory-mapped file read as a slice of `T`.
+pub struct MmapSlice<T> {
+    map: Mmap,
+    _t: PhantomData<T>,
+}
+
+impl<T: Pod> MmapSlice<T> {
+    pub fn open(path: &Path) -> Result<Self> {
+        let map = mmap(path)?;
+        ensure!(
+            map.len() % size_of::<T>() == 0,
+            "{} is not a whole number of items",
+            path.display()
+        );
+        Ok(Self {
+            map,
+            _t: PhantomData,
+        })
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        // A mapping starts on a page boundary, so it is aligned for any T.
+        bytemuck::cast_slice(&self.map)
+    }
+}
+
+/// A `.fbin` file (`u32 n, u32 d`, then n x d little-endian f32 rows), memory-mapped so a
+/// build streams it instead of loading it.
+pub struct Fbin {
+    map: Mmap,
+    pub n: usize,
+    pub d: usize,
+}
+
+impl Fbin {
+    pub fn open(path: &Path) -> Result<Self> {
+        let map = mmap(path)?;
+        ensure!(map.len() >= 8, "{} has no .fbin header", path.display());
+        let n = u32::from_le_bytes(map[..4].try_into().unwrap()) as usize;
+        let d = u32::from_le_bytes(map[4..8].try_into().unwrap()) as usize;
+        ensure!(
+            map.len() == 8 + n * d * 4,
+            "{} should hold {n} x {d} floats",
+            path.display()
+        );
+        Ok(Self { map, n, d })
+    }
+
+    pub fn row(&self, i: usize) -> &[f32] {
+        // The rows start 8 bytes into a page-aligned mapping, so they are aligned for f32.
+        let all: &[f32] = bytemuck::cast_slice(&self.map[8..]);
+        &all[i * self.d..(i + 1) * self.d]
+    }
+}
+
+/// Writes rows of `d` floats as a `.fbin` file.
+pub fn write_fbin(
+    path: &Path,
+    d: usize,
+    rows: impl ExactSizeIterator<Item = Vec<f32>>,
+) -> Result<()> {
+    let mut w = BufWriter::new(File::create(path)?);
+    w.write_all(&(rows.len() as u32).to_le_bytes())?;
+    w.write_all(&(d as u32).to_le_bytes())?;
+    for row in rows {
+        ensure!(
+            row.len() == d,
+            "row of {} floats in a {d}-dim file",
+            row.len()
+        );
+        w.write_all(bytemuck::cast_slice(&row))?;
+    }
+    w.flush()?;
+    Ok(())
+}
 
 /// The k best (doc, score): higher score first, ties to the smaller doc id.
 pub struct TopK {

@@ -2,8 +2,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 use telusur::{
     bench,
-    engine::{self, Index, Mode, Request, Response, Strategy},
+    engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     synth,
+    util::Fbin,
 };
 
 fn build(name: &str, docs: &[Value]) -> Index {
@@ -15,7 +16,7 @@ fn build(name: &str, docs: &[Value]) -> Index {
         docs.iter().map(|d| format!("{d}\n")).collect::<String>(),
     )
     .unwrap();
-    engine::build(&corpus, &dir.join("index")).unwrap();
+    engine::build(&corpus, &dir.join("index"), &BuildOptions::default()).unwrap();
     Index::open(&dir.join("index")).unwrap()
 }
 
@@ -35,6 +36,7 @@ fn keyword(index: &Index, query: &str, k: usize, strategy: Strategy) -> Response
         k,
         debug: true,
         strategy,
+        ..Request::default()
     };
     index.search(&req).unwrap()
 }
@@ -43,7 +45,12 @@ fn keyword(index: &Index, query: &str, k: usize, strategy: Strategy) -> Response
 fn maxscore_equals_exhaustive() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("maxscore");
     let queries = synth::text(&dir.join("corpus.jsonl"), 20_000, 200, 7).unwrap();
-    engine::build(&dir.join("corpus.jsonl"), &dir.join("index")).unwrap();
+    engine::build(
+        &dir.join("corpus.jsonl"),
+        &dir.join("index"),
+        &BuildOptions::default(),
+    )
+    .unwrap();
     let index = Index::open(&dir.join("index")).unwrap();
 
     // The synthetic 2 to 4 term queries, plus pairs of them joined into 4 to 8 term queries.
@@ -74,8 +81,8 @@ fn maxscore_equals_exhaustive() {
                     b.score
                 );
             }
-            decoded_exhaustive += e.stats.unwrap().postings_decoded;
-            decoded_maxscore += m.stats.unwrap().postings_decoded;
+            decoded_exhaustive += e.stats.unwrap().postings_decoded.unwrap();
+            decoded_maxscore += m.stats.unwrap().postings_decoded.unwrap();
         }
     }
     // How much less is B7's question; here it only has to be less.
@@ -282,4 +289,106 @@ fn ablation_tier_step_is_the_real_encoding() {
     assert_eq!(steps.len(), 5);
     assert_eq!(steps[3].footprint.postings, steps[4].footprint.postings);
     assert!(steps.windows(2).all(|w| w[1].total < w[0].total));
+}
+
+/// A corpus of `n` synthetic docs with synthetic vectors (`dims` each), built into an index.
+fn vector_index(name: &str, n: usize, dims: usize) -> (Index, Vec<Vec<f32>>, Vec<Vec<f32>>) {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    synth::text(&dir.join("corpus.jsonl"), n, 0, 3).unwrap();
+    let queries = synth::vectors(&dir.join("base.fbin"), n, 100, dims, 3).unwrap();
+    let opts = BuildOptions {
+        vectors: Some(dir.join("base.fbin")),
+        d_code: dims.min(256),
+        d_rerank: None,
+    };
+    engine::build(&dir.join("corpus.jsonl"), &dir.join("index"), &opts).unwrap();
+    let rows = |f: Fbin| (0..f.n).map(|i| f.row(i).to_vec()).collect::<Vec<_>>();
+    let base = rows(Fbin::open(&dir.join("base.fbin")).unwrap());
+    let queries = rows(Fbin::open(&queries).unwrap());
+    (Index::open(&dir.join("index")).unwrap(), base, queries)
+}
+
+fn neural(index: &Index, q: &[f32], k: usize) -> anyhow::Result<Response> {
+    index.search(&Request {
+        mode: Mode::Neural,
+        k,
+        vector: Some(q.to_vec()),
+        ..Request::default()
+    })
+}
+
+#[test]
+fn neural_recall_against_exact_search() {
+    // 512-dim vectors: 256-dim codes for the first stage, all 512 dims to rerank.
+    let (index, base, queries) = vector_index("neural_recall", 20_000, 512);
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let mut found = 0;
+    for q in &queries {
+        let mut exact: Vec<(usize, f32)> = base.iter().map(|v| dot(v, q)).enumerate().collect();
+        exact.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let truth: BTreeSet<String> = exact[..10]
+            .iter()
+            .map(|(i, _)| format!("synth-{i}"))
+            .collect();
+        let res = neural(&index, q, 10).unwrap();
+        assert_eq!(res.results.len(), 10);
+        found += res.results.iter().filter(|h| truth.contains(&h.id)).count();
+    }
+    let recall = found as f64 / (10 * queries.len()) as f64;
+    assert!(recall > 0.9, "recall@10 {recall}");
+}
+
+#[test]
+fn neural_modes_and_vector_checks() {
+    let (index, _, queries) = vector_index("neural_modes", 500, 128);
+    let res = serde_json::to_value(neural(&index, &queries[0], 5).unwrap()).unwrap();
+    assert_eq!(res["mode_used"], "neural");
+    for t in ["route", "scan", "rerank", "docs", "total"] {
+        assert!(res["timings_ms"][t].is_f64(), "{t}");
+    }
+    assert!(res["timings_ms"].get("keyword").is_none());
+
+    // No query vector and no embedder: neural fails, hybrid falls back to keyword.
+    let err = index
+        .search(&Request {
+            mode: Mode::Neural,
+            ..Request::default()
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("query vector"), "{err}");
+    let hybrid = index
+        .search(&Request {
+            query: "w1".into(),
+            ..Request::default()
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&hybrid).unwrap()["fallback_reason"],
+        "no_embedder"
+    );
+    assert!(
+        neural(&index, &queries[0][..64], 5).is_err(),
+        "wrong query dims"
+    );
+
+    // Every doc has a vector, or the build fails.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("neural_modes");
+    synth::vectors(&dir.join("short.fbin"), 499, 1, 128, 3).unwrap();
+    let opts = BuildOptions {
+        vectors: Some(dir.join("short.fbin")),
+        ..BuildOptions::default()
+    };
+    let err = engine::build(&dir.join("corpus.jsonl"), &dir.join("bad"), &opts).unwrap_err();
+    assert!(err.to_string().contains("499 rows"), "{err}");
+    for d_code in [100, 2048] {
+        let opts = BuildOptions {
+            vectors: Some(dir.join("base.fbin")),
+            d_code,
+            ..BuildOptions::default()
+        };
+        assert!(
+            engine::build(&dir.join("corpus.jsonl"), &dir.join("bad"), &opts).is_err(),
+            "d_code {d_code}"
+        );
+    }
 }

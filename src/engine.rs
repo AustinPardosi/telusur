@@ -3,6 +3,8 @@
 use crate::{
     docstore::{self, DocStore},
     text::index::{self as keyword, KeywordIndex},
+    util::Fbin,
+    vector::ivf::{self, VectorIndex},
 };
 use anyhow::{Context, Result, bail};
 pub use keyword::Strategy;
@@ -10,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -28,7 +30,10 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FallbackReason {
+    /// The index was built without vectors.
     NoVectors,
+    /// There is no query vector and nothing to embed the query text with.
+    NoEmbedder,
 }
 
 pub struct Request {
@@ -39,6 +44,10 @@ pub struct Request {
     pub debug: bool,
     /// Debug option: how keyword search scores.
     pub strategy: Strategy,
+    /// A full query vector, for neural search without an embedder.
+    pub vector: Option<Vec<f32>>,
+    /// How many of the best codes neural search rescores exactly (at least k).
+    pub rerank_depth: usize,
 }
 
 impl Default for Request {
@@ -49,6 +58,8 @@ impl Default for Request {
             k: 10,
             debug: false,
             strategy: Strategy::default(),
+            vector: None,
+            rerank_depth: 200,
         }
     }
 }
@@ -65,9 +76,10 @@ pub struct Response {
 }
 
 /// How much work a query did. Only with `debug`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Stats {
-    pub postings_decoded: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postings_decoded: Option<u64>,
 }
 
 /// One result. `id` is the external id; doc ids never leave the engine.
@@ -80,11 +92,40 @@ pub struct Hit {
     pub snippet: String,
 }
 
-#[derive(Debug, Serialize)]
+/// Milliseconds per stage. Only the stages that ran appear.
+#[derive(Debug, Default, Serialize)]
 pub struct Timings {
-    pub keyword: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rerank: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<f64>,
     pub docs: f64,
     pub total: f64,
+}
+
+/// What to build besides the keyword index.
+#[derive(Clone, Debug)]
+pub struct BuildOptions {
+    /// Full vectors, one `.fbin` row per doc. Without them the index is keyword only.
+    pub vectors: Option<PathBuf>,
+    /// Matryoshka prefix kept as the 1-bit code.
+    pub d_code: usize,
+    /// Prefix kept as the f16 rerank vector; defaults to the smaller of 1024 and the dims.
+    pub d_rerank: Option<usize>,
+}
+
+impl Default for BuildOptions {
+    fn default() -> Self {
+        Self {
+            vectors: None,
+            d_code: 256,
+            d_rerank: None,
+        }
+    }
 }
 
 /// One line of `corpus.jsonl`. Other fields are ignored for now.
@@ -99,18 +140,20 @@ struct CorpusDoc {
     url: String,
 }
 
-/// Builds an index in `out` from `corpus` (one JSON doc per line, line order = doc id).
-/// Returns the number of docs.
-pub fn build(corpus: &Path, out: &Path) -> Result<usize> {
-    build_with(corpus, out, |_| {})
+/// Builds an index in `out` from `corpus` (one JSON doc per line, line order = doc id, which
+/// is also the row in the vectors file). Returns the number of docs.
+pub fn build(corpus: &Path, out: &Path, opts: &BuildOptions) -> Result<usize> {
+    build_with(corpus, out, opts, |_| {})
 }
 
 /// `build`, letting `inspect` look at the keyword postings before they are written.
 pub fn build_with(
     corpus: &Path,
     out: &Path,
+    opts: &BuildOptions,
     inspect: impl FnOnce(&keyword::Builder),
 ) -> Result<usize> {
+    let vectors = opts.vectors.as_deref().map(Fbin::open).transpose()?;
     fs::create_dir_all(out)?;
     let file = File::open(corpus).with_context(|| format!("open {}", corpus.display()))?;
     let mut keyword = keyword::Builder::default();
@@ -124,6 +167,16 @@ pub fn build_with(
         docs.add([&d.id, &d.title, &d.url, docstore::snippet(&d.text)])?;
         n += 1;
     }
+    if let Some(v) = &vectors {
+        // Every doc has a vector, or none do.
+        if v.n != n {
+            bail!(
+                "the vectors file has {} rows but the corpus has {n} docs",
+                v.n
+            );
+        }
+        ivf::build(v, out, opts.d_code, opts.d_rerank)?;
+    }
     inspect(&keyword);
     keyword.finish(out)?;
     docs.finish(out)?;
@@ -133,6 +186,7 @@ pub fn build_with(
 pub struct Index {
     keyword: KeywordIndex,
     docs: DocStore,
+    vectors: Option<VectorIndex>,
 }
 
 impl Index {
@@ -140,6 +194,7 @@ impl Index {
         Ok(Self {
             keyword: KeywordIndex::open(dir)?,
             docs: DocStore::open(dir)?,
+            vectors: VectorIndex::open(dir)?,
         })
     }
 
@@ -148,17 +203,41 @@ impl Index {
         if req.k > MAX_K {
             bail!("k must be at most {MAX_K}, got {}", req.k);
         }
-        let fallback_reason = match req.mode {
-            Mode::Neural => {
+        let (neural, fallback_reason) = match (req.mode, &self.vectors, req.vector.as_deref()) {
+            (Mode::Keyword, ..) => (None, None),
+            (Mode::Neural, Some(index), Some(q)) => (Some((index, q)), None),
+            (Mode::Neural, None, _) => {
                 bail!("neural search needs vectors, and this index was built without them")
             }
-            Mode::Hybrid => Some(FallbackReason::NoVectors),
-            Mode::Keyword => None,
+            (Mode::Neural, Some(_), None) => {
+                bail!("neural search needs a query vector, and no embedder is configured")
+            }
+            (Mode::Hybrid, None, _) => (None, Some(FallbackReason::NoVectors)),
+            (Mode::Hybrid, Some(_), None) => (None, Some(FallbackReason::NoEmbedder)),
+            (Mode::Hybrid, Some(_), Some(_)) => {
+                bail!(
+                    "hybrid search with a query vector is not built yet; use keyword or neural mode"
+                )
+            }
         };
 
-        let t = Instant::now();
-        let (hits, postings_decoded) = self.keyword.search(&req.query, req.k, req.strategy);
-        let keyword = ms(t);
+        let mut timings = Timings::default();
+        let mut stats = Stats::default();
+        let hits = match neural {
+            Some((index, q)) => {
+                let (hits, t) = index.search(q, req.k, req.rerank_depth)?;
+                (timings.route, timings.scan, timings.rerank) =
+                    (Some(t.route), Some(t.scan), Some(t.rerank));
+                hits
+            }
+            None => {
+                let t = Instant::now();
+                let (hits, decoded) = self.keyword.search(&req.query, req.k, req.strategy);
+                timings.keyword = Some(ms(t));
+                stats.postings_decoded = Some(decoded);
+                hits
+            }
+        };
 
         let t = Instant::now();
         let results = hits
@@ -174,18 +253,19 @@ impl Index {
                 })
             })
             .collect::<Result<_>>()?;
-        let docs = ms(t);
+        timings.docs = ms(t);
+        timings.total = ms(start);
 
         Ok(Response {
-            mode_used: Mode::Keyword,
+            mode_used: if neural.is_some() {
+                Mode::Neural
+            } else {
+                Mode::Keyword
+            },
             fallback_reason,
             results,
-            timings_ms: Timings {
-                keyword,
-                docs,
-                total: ms(start),
-            },
-            stats: req.debug.then_some(Stats { postings_decoded }),
+            timings_ms: timings,
+            stats: req.debug.then_some(stats),
         })
     }
 }

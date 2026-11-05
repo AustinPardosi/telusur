@@ -1,7 +1,7 @@
 //! Speed benchmarks. Every report names the machine it ran on.
 
 use crate::{
-    engine::{self, Index, Mode, Request, Response, Strategy},
+    engine::{self, BuildOptions, Index, Mode, Request, Response, Strategy},
     eval::load_beir,
     text::{analyzer::analyze, index::Footprint},
     util::{hardware, percentile},
@@ -65,6 +65,7 @@ pub fn bm25(index: &Index, data: &Path, k: usize, threads: &[usize]) -> Result<B
             k,
             debug: true,
             strategy,
+            ..Request::default()
         })
     };
     let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
@@ -76,7 +77,7 @@ pub fn bm25(index: &Index, data: &Path, k: usize, threads: &[usize]) -> Result<B
         let (mut decoded, mut decoded_long, mut scores) = (Vec::new(), Vec::new(), Vec::new());
         for (q, &is_long) in texts.iter().zip(&long) {
             let res = search(q, strategy)?;
-            let d = res.stats.map_or(0, |s| s.postings_decoded) as f64;
+            let d = res.stats.and_then(|s| s.postings_decoded).unwrap_or(0) as f64;
             decoded.push(d);
             if is_long {
                 decoded_long.push(d);
@@ -87,7 +88,7 @@ pub fn bm25(index: &Index, data: &Path, k: usize, threads: &[usize]) -> Result<B
 
         let mut lat = Vec::with_capacity(timed);
         for q in texts.iter().cycle().take(timed) {
-            lat.push(search(q, strategy)?.timings_ms.keyword);
+            lat.push(search(q, strategy)?.timings_ms.keyword.unwrap_or(0.0));
         }
         lat.sort_by(f64::total_cmp);
 
@@ -177,7 +178,7 @@ pub struct AblationStep {
 /// BM25 post. Builds the index in `out`; the last step is the size of its files.
 pub fn ablate_postings(corpus: &Path, out: &Path) -> Result<AblationReport> {
     let mut seen = None;
-    let docs = engine::build_with(corpus, out, |b| {
+    let docs = engine::build_with(corpus, out, &BuildOptions::default(), |b| {
         seen = Some((b.ablation(), b.terms(), b.postings()))
     })?;
     let ((mut footprints, delta_varint_tf_postings), terms, postings) =

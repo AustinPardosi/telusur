@@ -3,8 +3,9 @@ use clap::{Parser, Subcommand};
 use std::{path::PathBuf, time::Instant};
 use telusur::{
     bench,
-    engine::{self, Index, Mode, Request, Strategy},
+    engine::{self, BuildOptions, Index, Mode, Request, Strategy},
     eval, synth,
+    util::Fbin,
 };
 
 #[derive(Parser)]
@@ -26,12 +27,32 @@ enum Cmd {
         corpus: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        /// Full vectors (.fbin), one row per doc in corpus order; enables neural search
+        #[arg(long)]
+        vectors: Option<PathBuf>,
+        /// Dims kept as the 1-bit code: a multiple of 64, at most 1024
+        #[arg(long, default_value_t = 256)]
+        d_code: usize,
+        /// Dims kept as the f16 rerank vector [default: the smaller of 1024 and the dims]
+        #[arg(long)]
+        d_rerank: Option<usize>,
     },
     /// Search an index and print the response as JSON
     Search {
         #[arg(long)]
         index: PathBuf,
+        /// Query text (keyword and hybrid modes)
+        #[arg(default_value = "")]
         query: String,
+        /// Take the query vector from this .fbin file (neural mode)
+        #[arg(long)]
+        query_vectors: Option<PathBuf>,
+        /// Row of --query-vectors to use
+        #[arg(long, default_value_t = 0)]
+        query_row: usize,
+        /// How many of the best codes neural search rescores exactly
+        #[arg(long, default_value_t = 200)]
+        rerank_depth: usize,
         #[arg(long, default_value_t = 10)]
         k: usize,
         #[arg(long, value_enum, default_value_t)]
@@ -103,6 +124,19 @@ enum Synth {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Matryoshka-like vectors (.fbin), plus queries in queries.fbin next to them
+    Vectors {
+        #[arg(long, default_value_t = 100_000)]
+        docs: usize,
+        #[arg(long, default_value_t = 1000)]
+        queries: usize,
+        #[arg(long, default_value_t = 768)]
+        dims: usize,
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -120,9 +154,37 @@ fn main() -> Result<()> {
                 qpath.display()
             );
         }
-        Cmd::Index { corpus, out } => {
+        Cmd::Synth(Synth::Vectors {
+            docs,
+            queries,
+            dims,
+            seed,
+            out,
+        }) => {
+            let qpath = synth::vectors(&out, docs, queries, dims, seed)?;
+            println!(
+                "wrote {docs} vectors to {} and {queries} queries to {}",
+                out.display(),
+                qpath.display()
+            );
+        }
+        Cmd::Index {
+            corpus,
+            out,
+            vectors,
+            d_code,
+            d_rerank,
+        } => {
             let start = Instant::now();
-            let n = engine::build(&corpus, &out)?;
+            let n = engine::build(
+                &corpus,
+                &out,
+                &BuildOptions {
+                    vectors,
+                    d_code,
+                    d_rerank,
+                },
+            )?;
             println!(
                 "indexed {n} docs into {} in {:.1}s",
                 out.display(),
@@ -132,17 +194,29 @@ fn main() -> Result<()> {
         Cmd::Search {
             index,
             query,
+            query_vectors,
+            query_row,
+            rerank_depth,
             k,
             mode,
             debug,
             strategy,
         } => {
+            let vector = query_vectors
+                .map(|p| -> anyhow::Result<Vec<f32>> {
+                    let f = Fbin::open(&p)?;
+                    anyhow::ensure!(query_row < f.n, "{} has {} rows", p.display(), f.n);
+                    Ok(f.row(query_row).to_vec())
+                })
+                .transpose()?;
             let req = Request {
                 query,
                 mode,
                 k,
                 debug,
                 strategy,
+                vector,
+                rerank_depth,
             };
             let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);

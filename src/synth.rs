@@ -1,8 +1,9 @@
 //! Synthetic data for tests and quick speed checks. Never quote it as quality results.
 
+use crate::{util::write_fbin, vector::quant::truncate_normalize};
 use anyhow::Result;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::index::sample};
-use rand_distr::{Distribution, Zipf};
+use rand_distr::{Distribution, Normal, Zipf};
 use serde_json::json;
 use std::{
     fmt::Write as _,
@@ -76,5 +77,52 @@ pub fn text(out: &Path, docs: usize, queries: usize, seed: u64) -> Result<PathBu
         writeln!(w, "{}", json!({ "_id": format!("q{i}"), "text": q }))?;
     }
     w.flush()?;
+    Ok(path)
+}
+
+/// Top-level centers of the vector mixture, and sub-centers per center.
+const CENTERS: usize = 64;
+const SUBCENTERS: usize = 16;
+
+/// Writes `docs` base vectors to `out` and `queries` query vectors to `queries.fbin` next to
+/// it, seeded and deterministic: a two-level Gaussian mixture whose per-dim spread decays
+/// with the dim index, like a Matryoshka model, each vector normalized. Returns the queries
+/// path.
+pub fn vectors(out: &Path, docs: usize, queries: usize, dims: usize, seed: u64) -> Result<PathBuf> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let normal = Normal::new(0.0f32, 1.0)?;
+    let decay: Vec<f32> = (0..dims)
+        .map(|d| (1.0 + d as f32 / 32.0).powf(-0.5))
+        .collect();
+    let gaussian = |rng: &mut StdRng, sd: f32| -> Vec<f32> {
+        (0..dims).map(|_| sd * normal.sample(rng)).collect()
+    };
+    let centers: Vec<Vec<f32>> = (0..CENTERS).map(|_| gaussian(&mut rng, 1.0)).collect();
+    let subcenters: Vec<Vec<f32>> = (0..CENTERS * SUBCENTERS)
+        .map(|i| {
+            centers[i / SUBCENTERS]
+                .iter()
+                .zip(gaussian(&mut rng, 0.5))
+                .map(|(c, x)| c + x)
+                .collect()
+        })
+        .collect();
+    let point = |rng: &mut StdRng| -> Vec<f32> {
+        let sub = &subcenters[rng.random_range(0..subcenters.len())];
+        let v: Vec<f32> = sub
+            .iter()
+            .zip(gaussian(rng, 0.3))
+            .zip(&decay)
+            .map(|((s, x), w)| (s + x) * w)
+            .collect();
+        truncate_normalize(&v, dims)
+    };
+
+    if let Some(dir) = out.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    write_fbin(out, dims, (0..docs).map(|_| point(&mut rng)))?;
+    let path = out.with_file_name("queries.fbin");
+    write_fbin(&path, dims, (0..queries).map(|_| point(&mut rng)))?;
     Ok(path)
 }
