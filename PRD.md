@@ -155,7 +155,7 @@ An index is read-only once built: no add, update or delete, and changing the cor
 **Search**
 
 1. Route: dot product of the query prefix with every centroid, keep the best `nprobe` clusters, scan best first so the threshold rises early.
-2. Scan: kernel scores each cluster into a u16 buffer; keep the top rerank depth candidates (default 200) with a threshold check before touching the heap.
+2. Scan: kernel scores each cluster into a u16 buffer; keep the top rerank depth candidates (default 500, from B3: at 200 recall stops near 0.92 on DBpedia) with a threshold check before touching the heap.
 3. Rerank: exact dot product with rerank vectors; return top k. The query can arrive as a full vector; it is truncated and normalized first.
 4. Filters: a roaring bitmap of allowed ids. If it allows ≤ 20,000 docs, skip the index and score those docs exactly with rerank vectors (this is Exa's "only search the docs that match"). Otherwise scan with `nprobe / selectivity` clusters (capped) and drop disallowed ids before the heap.
 

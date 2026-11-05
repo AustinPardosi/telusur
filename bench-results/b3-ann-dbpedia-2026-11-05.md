@@ -49,7 +49,7 @@ telusur bench ann ... --nprobe 256,512,1024 --rerank-depth 200,500,1000
 | 1024            | 500          | 0.964                | 0.845              | 524,626       | 4.431  | 8.283  | 1,007 / 1,346      |
 | 1024            | 1000         | 0.981                | 0.852              | 524,626       | 6.205  | 13.390 | 688 / 1,102        |
 
-**Default clusters probed: 256.** It is the smallest count in either sweep to reach recall@10 of 0.95 against rerank ground truth, and it does so at rerank depth 500 (0.952 at 2.09 ms p50). That meets the PRD target of at least 0.95 at a p50 of at most 5 ms.
+**Defaults: 256 clusters probed, rerank depth 500.** 256 is the smallest count in either sweep to reach recall@10 of 0.95 against rerank ground truth, and it does so at rerank depth 500 (0.952 at 2.09 ms p50), so the default rerank depth went from 200 to 500 with it. That meets the PRD target of at least 0.95 at a p50 of at most 5 ms.
 
 **What the numbers say:**
 

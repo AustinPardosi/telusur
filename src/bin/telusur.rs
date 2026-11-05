@@ -71,7 +71,7 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         query_row: usize,
         /// How many of the best codes neural search rescores exactly (0: no rerank)
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = 500)]
         rerank_depth: usize,
         /// Clusters neural search probes [default: 256, from B3]
         #[arg(long)]

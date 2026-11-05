@@ -279,7 +279,7 @@ DBpedia 1M, OpenAI text-embedding-3-large (3072 dims), 2,048 clusters, 256-dim c
 | 256 (default)   | 500          | 0.952 / 0.835                | 2.09   | 3.27   | 1,941 / 2,784        |
 | 512             | 1000         | 0.976 / 0.849                | 3.61   | 4.59   | 1,093 / 1,737        |
 
-The default of 256 clusters probed is the smallest that reaches 0.95 against rerank ground truth; it needs a rerank depth of 500, because at depth 200 recall stops near 0.92. Against full ground truth recall tops out near 0.85: that is the cost of reranking with 1024 of the 3072 dims. QPS at 10 threads is noisy on a laptop with other apps open.
+The defaults, 256 clusters probed and a rerank depth of 500, are the smallest that reach 0.95 against rerank ground truth; at depth 200 recall stops near 0.92 however many clusters are probed. Against full ground truth recall tops out near 0.85: that is the cost of reranking with 1024 of the 3072 dims. QPS at 10 threads is noisy on a laptop with other apps open.
 
 
  

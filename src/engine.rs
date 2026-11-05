@@ -49,7 +49,8 @@ pub struct Request {
     pub strategy: Strategy,
     /// A full query vector, for neural search without an embedder.
     pub vector: Option<Vec<f32>>,
-    /// How many of the best codes neural search rescores exactly (at least k).
+    /// How many of the best codes neural search rescores exactly (at least k). The default,
+    /// 500, is what reached recall@10 of 0.95 with the default clusters probed in B3.
     pub rerank_depth: usize,
     /// Debug option: the scoring kernel, instead of the process default.
     pub kernel: Option<Kernel>,
@@ -66,7 +67,7 @@ impl Default for Request {
             debug: false,
             strategy: Strategy::default(),
             vector: None,
-            rerank_depth: 200,
+            rerank_depth: 500,
             kernel: None,
             nprobe: None,
         }
