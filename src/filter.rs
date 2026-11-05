@@ -201,6 +201,27 @@ impl FilterIndex {
         })
     }
 
+    /// The crawl date field, if the index has one.
+    pub fn date_field(&self) -> Option<&str> {
+        self.date.as_deref()
+    }
+
+    /// Every value of `field` with its number of docs, in value order (date order for the
+    /// crawl date field).
+    pub fn value_counts(&self, field: &str) -> Result<Vec<(String, u64)>> {
+        let Some(f) = self.fields.get(field) else {
+            bail!("{field} is not a filter field of this index");
+        };
+        let mut out = Vec::with_capacity(f.values.len());
+        let mut stream = f.values.stream();
+        while let Some((value, at)) = stream.next() {
+            let bytes = &f.bitmaps[(at >> 32) as usize..][..at as u32 as usize];
+            let docs = RoaringBitmap::deserialize_from(bytes)?.len();
+            out.push((String::from_utf8_lossy(value).into_owned(), docs));
+        }
+        Ok(out)
+    }
+
     /// The docs that pass every filter, or `None` when there are no filters.
     pub fn allowed(&self, filters: &Filters) -> Result<Option<RoaringBitmap>> {
         let mut allowed: Option<RoaringBitmap> = None;

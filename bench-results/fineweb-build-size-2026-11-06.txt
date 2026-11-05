@@ -1,0 +1,57 @@
+$ /usr/bin/time -l telusur index --corpus data/fineweb/corpus.jsonl (first shard, 1,048,417 docs) --out indexes/fineweb-1m --keyword-fields domain --date-field crawl_date
+indexed 1048417 docs into indexes/fineweb-1m in 428.5s
+part                                  bytes    bytes/doc
+postings                          277932787       265.10
+skip entries                       11610424        11.07
+term dictionary                    43102552        41.11
+doc length norms                    1048417         1.00
+doc store                         338359987       322.73
+doc store offsets                   8387344         8.00
+keyword stats                            43         0.00
+      428.62 real       407.32 user        13.99 sys
+          2895101952  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              315139  page reclaims
+                   5  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  46  voluntary context switches
+              134063  involuntary context switches
+       2269695598471  instructions retired
+        903757204240  cycles elapsed
+          2843364136  peak memory footprint
+
+$ /usr/bin/time -l telusur index --corpus <(head -n 2000000 data/fineweb/corpus.jsonl) --out indexes/fineweb-2m --keyword-fields domain --date-field crawl_date
+indexed 2000000 docs into indexes/fineweb-2m in 790.8s
+part                                  bytes    bytes/doc
+postings                          529582828       264.79
+skip entries                       22583160        11.29
+term dictionary                    69440767        34.72
+doc length norms                    2000000         1.00
+doc store                         646053208       323.03
+doc store offsets                  16000008         8.00
+keyword stats                            43         0.00
+      790.93 real       761.18 user        22.58 sys
+          4660969472  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              833237  page reclaims
+                  22  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                8926  voluntary context switches
+               91595  involuntary context switches
+       4331584498656  instructions retired
+       1661413118667  cycles elapsed
+          5207511912  peak memory footprint

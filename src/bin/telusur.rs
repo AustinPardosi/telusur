@@ -126,6 +126,18 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum Bench {
+    /// B5 for keyword search: domain and crawl date filters at 0.1% to 50% selectivity
+    KeywordFilters {
+        #[arg(long)]
+        index: PathBuf,
+        /// BEIR directory whose test queries to run (queries.jsonl and qrels/test.tsv)
+        #[arg(long)]
+        data: PathBuf,
+        #[arg(long, default_value = "domain")]
+        domain_field: String,
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+    },
     /// B12: HTTP latency per mode, with the server's per-stage split, against a running serve
     Http {
         #[arg(long, default_value = "http://127.0.0.1:8080")]
@@ -426,6 +438,15 @@ fn main() -> Result<()> {
                 query_vectors.as_deref(),
                 run.as_deref(),
             )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::KeywordFilters {
+            index,
+            data,
+            domain_field,
+            k,
+        }) => {
+            let report = bench::keyword_filters(&index, &data, &domain_field, k)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Cmd::Bench(Bench::Http {

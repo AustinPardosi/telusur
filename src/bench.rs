@@ -741,3 +741,163 @@ pub fn http(
         modes: runs,
     })
 }
+
+#[derive(Serialize)]
+pub struct KeywordFilterReport {
+    pub bench: &'static str,
+    pub index: String,
+    pub docs: usize,
+    pub queries_from: String,
+    pub queries: usize,
+    pub k: usize,
+    pub machine: String,
+    pub runs: Vec<KeywordFilterRun>,
+}
+
+#[derive(Serialize)]
+pub struct KeywordFilterRun {
+    /// What the filter asks for, e.g. "the 12 biggest domains" or "crawl_date >= 2022-05-20".
+    pub filter: String,
+    /// Share of docs the filter allows; 1.0 is no filter.
+    pub selectivity: f64,
+    pub docs_allowed: u64,
+    pub postings_decoded_mean: f64,
+    /// Queries whose MaxScore top-k scores differ from exhaustive under the same filter.
+    pub mismatched_queries: usize,
+    /// Filter lookup plus MaxScore keyword search, one thread.
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub mean_ms: f64,
+}
+
+/// B5 for keyword search on the index in `dir`: lists of the biggest domains (values of
+/// `domain_field`) and ranges of the most recent crawl days, each grown until it allows about
+/// 0.1%, 1%, 10% or 50% of the docs (domains only to 1%: past that a list is thousands of
+/// domains), searched with the test queries of the BEIR dataset in `data`.
+pub fn keyword_filters(
+    dir: &Path,
+    data: &Path,
+    domain_field: &str,
+    k: usize,
+) -> Result<KeywordFilterReport> {
+    let index = Index::open(dir)?;
+    let filter_index = FilterIndex::open(dir)?;
+    let n = index.docs();
+    let (_, queries) = load_beir(data)?;
+    let texts: Vec<&str> = queries.values().map(String::as_str).collect();
+
+    // The shortest prefix of `counts` holding at least `share` of the docs.
+    let prefix = |counts: &[(String, u64)], share: f64| {
+        let mut sum = 0;
+        let len = counts
+            .iter()
+            .position(|(_, c)| {
+                sum += c;
+                sum as f64 >= share * n as f64
+            })
+            .map_or(counts.len(), |i| i + 1);
+        counts[..len]
+            .iter()
+            .map(|(v, _)| v.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut specs = vec![("no filter".to_string(), Filters::new())];
+    let mut domains = filter_index.value_counts(domain_field)?;
+    domains.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    for share in [0.001, 0.01] {
+        let values = prefix(&domains, share);
+        let label = format!("the {} biggest {domain_field}s", values.len());
+        specs.push((
+            label,
+            [(domain_field.to_string(), Filter::Any(values))].into(),
+        ));
+    }
+    if let Some(date) = filter_index.date_field() {
+        let days = filter_index.value_counts(date)?;
+        for share in [0.001, 0.01, 0.1, 0.5] {
+            // The run of consecutive crawl days whose doc count is closest to the target.
+            let target = share * n as f64;
+            let mut best = (f64::INFINITY, 0, 0);
+            for i in 0..days.len() {
+                let mut sum = 0;
+                for (j, (_, c)) in days.iter().enumerate().skip(i) {
+                    sum += c;
+                    let off = (sum as f64 - target).abs();
+                    if off < best.0 {
+                        best = (off, i, j);
+                    }
+                    if sum as f64 >= target {
+                        break;
+                    }
+                }
+            }
+            let (from, to) = (days[best.1].0.clone(), days[best.2].0.clone());
+            let label = format!("{date} {from} to {to}");
+            let range = Filter::Range {
+                gte: Some(from),
+                lte: Some(to),
+            };
+            specs.push((label, [(date.to_string(), range)].into()));
+        }
+    }
+
+    let timed = texts.len() * MIN_TIMED.div_ceil(texts.len());
+    let search = |q: &str, strategy, filters: &Filters| {
+        index.search(&Request {
+            query: q.into(),
+            mode: Mode::Keyword,
+            k,
+            debug: true,
+            strategy,
+            filters: filters.clone(),
+            ..Request::default()
+        })
+    };
+    let close = |a: f32, b: f32| (a - b).abs() <= 1e-5 * a.abs().max(b.abs());
+    let mut runs = Vec::new();
+    for (filter, filters) in specs {
+        let docs_allowed = filter_index
+            .allowed(&filters)?
+            .map_or(n as u64, |a| a.len());
+        // Warm-up pass, also checking MaxScore against exhaustive.
+        let (mut decoded, mut mismatched_queries) = (0, 0);
+        for q in &texts {
+            let m = search(q, Strategy::Maxscore, &filters)?;
+            let e = search(q, Strategy::Exhaustive, &filters)?;
+            decoded += m.stats.and_then(|s| s.postings_decoded).unwrap_or(0);
+            let differs = m.results.len() != e.results.len()
+                || m.results
+                    .iter()
+                    .zip(&e.results)
+                    .any(|(a, b)| !close(a.score, b.score));
+            mismatched_queries += usize::from(differs);
+        }
+        let mut lat = Vec::with_capacity(timed);
+        for q in texts.iter().cycle().take(timed) {
+            let start = Instant::now();
+            search(q, Strategy::Maxscore, &filters)?;
+            lat.push(start.elapsed().as_secs_f64() * 1e3);
+        }
+        lat.sort_by(f64::total_cmp);
+        runs.push(KeywordFilterRun {
+            filter,
+            selectivity: docs_allowed as f64 / n as f64,
+            docs_allowed,
+            postings_decoded_mean: decoded as f64 / texts.len() as f64,
+            mismatched_queries,
+            p50_ms: percentile(&lat, 50.0),
+            p99_ms: percentile(&lat, 99.0),
+            mean_ms: lat.iter().sum::<f64>() / lat.len() as f64,
+        });
+    }
+    Ok(KeywordFilterReport {
+        bench: "keyword-filters",
+        index: dir.display().to_string(),
+        docs: n,
+        queries_from: data.display().to_string(),
+        queries: texts.len(),
+        k,
+        machine: hardware(),
+        runs,
+    })
+}
