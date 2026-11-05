@@ -4,7 +4,7 @@
 //! Recall@100 averaged over every query in the qrels (`trec_eval -c`).
 
 use crate::{
-    engine::{Index, MAX_K, Mode, Request},
+    engine::{Index, MAX_K, Mode, Request, Strategy},
     util::hardware,
 };
 use anyhow::{Context, Result};
@@ -86,9 +86,8 @@ struct Query {
     text: String,
 }
 
-/// Runs the test queries of the BEIR dataset in `data` (corpus.jsonl, queries.jsonl,
-/// qrels/test.tsv) against `index`. Optionally writes the run in TREC format to `run_out`.
-pub fn beir(index: &Index, data: &Path, run_out: Option<&Path>) -> Result<Report> {
+/// The test qrels of the BEIR dataset in `data`, and the text of each judged query by id.
+pub fn load_beir(data: &Path) -> Result<(Qrels, BTreeMap<String, String>)> {
     let mut qrels = Qrels::new();
     let tsv = data.join("qrels/test.tsv");
     for line in fs::read_to_string(&tsv)
@@ -112,7 +111,13 @@ pub fn beir(index: &Index, data: &Path, run_out: Option<&Path>) -> Result<Report
             queries.insert(q.id, q.text);
         }
     }
+    Ok((qrels, queries))
+}
 
+/// Runs the test queries of the BEIR dataset in `data` (corpus.jsonl, queries.jsonl,
+/// qrels/test.tsv) against `index`. Optionally writes the run in TREC format to `run_out`.
+pub fn beir(index: &Index, data: &Path, run_out: Option<&Path>) -> Result<Report> {
+    let (qrels, queries) = load_beir(data)?;
     let start = Instant::now();
     let mut run = Run::new();
     let mut out = run_out.map(File::create).transpose()?.map(BufWriter::new);
@@ -121,6 +126,9 @@ pub fn beir(index: &Index, data: &Path, run_out: Option<&Path>) -> Result<Report
             query: text.clone(),
             mode: Mode::Keyword,
             k: MAX_K,
+            // At k = 1000 there is little to prune, and exhaustive scores are the reference.
+            strategy: Strategy::Exhaustive,
+            ..Request::default()
         })?;
         let hits: Vec<(String, f64)> = res
             .results

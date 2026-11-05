@@ -46,7 +46,7 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | Hot memory per vector                                    | TBD bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
 | BM25 index size vs naive                                 | TBD smaller                           |
-| Postings decoded, MaxScore vs exhaustive                 | TBD fewer, identical results          |
+| Postings decoded, MaxScore vs exhaustive                 | 50% fewer on TREC-COVID, same top-10  |
 | Ingest throughput (FineWeb)                              | TBD docs/s (TBD docs/day)             |
 
 
@@ -135,15 +135,21 @@ Exa's BM25 post groups each term's postings by term frequency to save memory: al
 
  
 
-It turns out that grouping does a second job. Every doc in a tier has the same tf, so the tier's best possible score is known exactly. Treat each (term, tier) as its own list and run MaxScore over them, and the long tf=1 tiers of common words get skipped unless a document could still make the top k. Same top-k scores as scoring everything, far less decoding.
+It turns out that grouping does a second job. Every doc in a tier has the same tf, so the tier's best possible score is known exactly. Treat each (term, tier) as its own list and run MaxScore over them, and the long tf=1 tiers of common words get skipped unless a document could still make the top k. Same top-k scores as scoring everything, and the bigger the corpus, the less decoding.
 
  
 
+BEIR test queries, k = 10, Apple M4 ([B7](bench-results/b7-bm25-pruning-2026-11-05.md)). Each cell is exhaustive / MaxScore over tiers; latency is the keyword stage on one thread.
 
-| Strategy            | Postings decoded | p50 | p99 |
-| ------------------- | ---------------- | --- | --- |
-| Exhaustive          | TBD              | TBD | TBD |
-| MaxScore over tiers | TBD              | TBD | TBD |
+
+| Dataset    | Postings decoded per query | p50 ms        | p99 ms        | QPS, 1 thread   |
+| ---------- | -------------------------- | ------------- | ------------- | --------------- |
+| SciFact    | 4,376 / 4,103              | 0.066 / 0.047 | 0.090 / 0.119 | 14,936 / 20,312 |
+| NFCorpus   | 671 / 671                  | 0.012 / 0.009 | 0.050 / 0.035 | 55,005 / 78,495 |
+| FiQA       | 47,742 / 29,959            | 0.634 / 0.374 | 0.864 / 1.497 | 1,750 / 2,230   |
+| TREC-COVID | 182,938 / 91,402           | 1.895 / 1.033 | 2.691 / 5.065 | 540 / 784       |
+
+MaxScore wins on p50 and throughput everywhere, but loses p99 on long queries (9 to 20 terms), where every candidate probes many dense tiers. Block-max bounds inside tiers are the next step.
 
 
  

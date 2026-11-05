@@ -1,6 +1,9 @@
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf};
-use telusur::engine::{self, Index, Mode, Request, Response};
+use telusur::{
+    engine::{self, Index, Mode, Request, Response, Strategy},
+    synth,
+};
 
 fn build(name: &str, docs: &[Value]) -> Index {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
@@ -20,7 +23,65 @@ fn search(index: &Index, query: &str, mode: Mode, k: usize) -> anyhow::Result<Re
         query: query.into(),
         mode,
         k,
+        ..Request::default()
     })
+}
+
+fn keyword(index: &Index, query: &str, k: usize, strategy: Strategy) -> Response {
+    let req = Request {
+        query: query.into(),
+        mode: Mode::Keyword,
+        k,
+        debug: true,
+        strategy,
+    };
+    index.search(&req).unwrap()
+}
+
+#[test]
+fn maxscore_equals_exhaustive() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("maxscore");
+    let queries = synth::text(&dir.join("corpus.jsonl"), 20_000, 200, 7).unwrap();
+    engine::build(&dir.join("corpus.jsonl"), &dir.join("index")).unwrap();
+    let index = Index::open(&dir.join("index")).unwrap();
+
+    // The synthetic 2 to 4 term queries, plus pairs of them joined into 4 to 8 term queries.
+    let short: Vec<String> = fs::read_to_string(queries)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    let long: Vec<String> = short.chunks(2).map(|p| p.join(" ")).collect();
+
+    let (mut decoded_exhaustive, mut decoded_maxscore) = (0, 0);
+    for q in short.iter().chain(&long) {
+        for k in [1, 10, 100] {
+            let e = keyword(&index, q, k, Strategy::Exhaustive);
+            let m = keyword(&index, q, k, Strategy::Maxscore);
+            assert_eq!(e.results.len(), m.results.len(), "{q} k={k}");
+            for (rank, (a, b)) in e.results.iter().zip(&m.results).enumerate() {
+                let rel = (a.score - b.score).abs() / a.score;
+                assert!(
+                    rel <= 1e-5,
+                    "{q} k={k} rank {rank}: {} vs {}",
+                    a.score,
+                    b.score
+                );
+            }
+            decoded_exhaustive += e.stats.unwrap().postings_decoded;
+            decoded_maxscore += m.stats.unwrap().postings_decoded;
+        }
+    }
+    // How much less is B7's question; here it only has to be less.
+    assert!(
+        decoded_maxscore < decoded_exhaustive,
+        "{decoded_maxscore} vs {decoded_exhaustive}"
+    );
 }
 
 fn words(spec: &[(&str, usize)]) -> String {
@@ -91,9 +152,13 @@ fn bm25_matches_hand_written_lucene_formula() {
         .collect();
     assert!(tokens.iter().any(|d| d.len() == 41) && tokens.iter().any(|d| d.len() == 100));
 
-    for query in ["alpha beta delta", "alpha alpha gamma", "gamma", "delta"] {
+    let queries = ["alpha beta delta", "alpha alpha gamma", "gamma", "delta"];
+    for (query, strategy) in queries
+        .iter()
+        .flat_map(|q| [(q, Strategy::Exhaustive), (q, Strategy::Maxscore)])
+    {
         let expected = lucene_bm25(&tokens, &query.split(' ').collect::<Vec<_>>());
-        let res = search(&index, query, Mode::Keyword, 10).unwrap();
+        let res = keyword(&index, query, 10, strategy);
         let matching = expected.iter().filter(|&&s| s > 0.0).count();
         assert_eq!(res.results.len(), matching, "{query}");
         for hit in &res.results {

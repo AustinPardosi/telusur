@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::{path::PathBuf, time::Instant};
 use telusur::{
-    engine::{self, Index, Mode, Request},
+    bench,
+    engine::{self, Index, Mode, Request, Strategy},
     eval, synth,
 };
 
@@ -35,10 +36,36 @@ enum Cmd {
         k: usize,
         #[arg(long, value_enum, default_value_t)]
         mode: Mode,
+        /// Add stats (postings decoded) to the response
+        #[arg(long)]
+        debug: bool,
+        /// Debug option: how keyword search scores
+        #[arg(long, value_enum, default_value_t)]
+        strategy: Strategy,
     },
     /// Measure retrieval quality and print a JSON report
     #[command(subcommand)]
     Eval(Eval),
+    /// Measure speed and print a JSON report
+    #[command(subcommand)]
+    Bench(Bench),
+}
+
+#[derive(Subcommand)]
+enum Bench {
+    /// B7: exhaustive vs MaxScore keyword search on a BEIR test set
+    Bm25 {
+        /// Directory with queries.jsonl and qrels/test.tsv
+        #[arg(long)]
+        data: PathBuf,
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Thread counts to measure QPS at
+        #[arg(long, value_delimiter = ',', default_value = "1,4,10")]
+        threads: Vec<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,12 +127,30 @@ fn main() -> Result<()> {
             query,
             k,
             mode,
+            debug,
+            strategy,
         } => {
-            let res = Index::open(&index)?.search(&Request { query, mode, k })?;
+            let req = Request {
+                query,
+                mode,
+                k,
+                debug,
+                strategy,
+            };
+            let res = Index::open(&index)?.search(&req)?;
             println!("{}", serde_json::to_string_pretty(&res)?);
         }
         Cmd::Eval(Eval::Beir { data, index, run }) => {
             let report = eval::beir(&Index::open(&index)?, &data, run.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Bench(Bench::Bm25 {
+            data,
+            index,
+            k,
+            threads,
+        }) => {
+            let report = bench::bm25(&Index::open(&index)?, &data, k, &threads)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }

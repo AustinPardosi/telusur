@@ -51,6 +51,7 @@ TELUSUR_KERNEL=scalar cargo test --release   # force a kernel
 | `src/engine.rs`        | hybrid search, RRF, per-stage timings                                                 |
 | `src/server.rs`        | axum HTTP API, embedder sidecar client                                                |
 | `src/eval.rs`          | recall@k, nDCG@10, Recall@100, BEIR loader                                            |
+| `src/bench.rs`         | `telusur bench` speed runs (latency, QPS, work counters), machine in every report     |
 | `src/ingest.rs`        | FineWeb parquet streaming, normalize, dedup                                           |
 | `src/synth.rs`         | synthetic vectors and Zipfian text                                                    |
 | `src/bin/telusur.rs`   | CLI                                                                                   |

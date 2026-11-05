@@ -5,6 +5,7 @@ use crate::{
     text::index::{self as keyword, KeywordIndex},
 };
 use anyhow::{Context, Result, bail};
+pub use keyword::Strategy;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -34,6 +35,22 @@ pub struct Request {
     pub query: String,
     pub mode: Mode,
     pub k: usize,
+    /// Adds `stats` to the response.
+    pub debug: bool,
+    /// Debug option: how keyword search scores.
+    pub strategy: Strategy,
+}
+
+impl Default for Request {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            mode: Mode::default(),
+            k: 10,
+            debug: false,
+            strategy: Strategy::default(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +60,14 @@ pub struct Response {
     pub fallback_reason: Option<FallbackReason>,
     pub results: Vec<Hit>,
     pub timings_ms: Timings,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Stats>,
+}
+
+/// How much work a query did. Only with `debug`.
+#[derive(Debug, Serialize)]
+pub struct Stats {
+    pub postings_decoded: u64,
 }
 
 /// One result. `id` is the external id; doc ids never leave the engine.
@@ -122,7 +147,7 @@ impl Index {
         };
 
         let t = Instant::now();
-        let hits = self.keyword.search(&req.query, req.k);
+        let (hits, postings_decoded) = self.keyword.search(&req.query, req.k, req.strategy);
         let keyword = ms(t);
 
         let t = Instant::now();
@@ -150,6 +175,7 @@ impl Index {
                 docs,
                 total: ms(start),
             },
+            stats: req.debug.then_some(Stats { postings_decoded }),
         })
     }
 }

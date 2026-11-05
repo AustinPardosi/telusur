@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod docstore;
 pub mod engine;
 pub mod eval;
