@@ -1,0 +1,28 @@
+{
+  "bench": "ingest",
+  "files": [
+    "data/fineweb/000_00000.parquet"
+  ],
+  "docs_read": 1048581,
+  "docs_written": 1048417,
+  "duplicates": 164,
+  "cut": 451,
+  "empty": 0,
+  "text_bytes_written": 3192953421,
+  "seconds": {
+    "read": 3.584925904999999,
+    "normalize": 7.274498803999996,
+    "dedup": 0.6652243339999999,
+    "write": 2.736996402000003,
+    "total": 14.296302583
+  },
+  "docs_per_sec": {
+    "read": 292497.2587404147,
+    "normalize": 144144.77591547908,
+    "dedup": 1576281.78406354,
+    "write": 383053.8466305221,
+    "total": 73346.30712467483
+  },
+  "docs_per_day": 6337120935.571905,
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power"
+}

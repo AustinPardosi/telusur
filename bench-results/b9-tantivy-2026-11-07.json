@@ -1,0 +1,267 @@
+[
+  {
+    "bench": "tantivy-index",
+    "bytes": 1130658441,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 3000105,
+      "idx": 935227558,
+      "json": 919,
+      "lock": 0,
+      "pos": 103,
+      "store": 126045675,
+      "term": 66383935
+    },
+    "corpus": "data/fineweb/corpus.jsonl",
+    "docs": 3000000,
+    "index_seconds": 129.682777542,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mem_mb": 4000,
+    "merge_seconds": 19.189849333,
+    "segments_before_merge": 10,
+    "threads": 10
+  },
+  {
+    "bench": "tantivy-index",
+    "bytes": 7027626,
+    "bytes_by_extension": {
+      "fast": 145,
+      "fieldnorm": 57743,
+      "idx": 5636286,
+      "json": 915,
+      "lock": 0,
+      "pos": 103,
+      "store": 552913,
+      "term": 779521
+    },
+    "corpus": "data/fiqa/corpus.jsonl",
+    "docs": 57638,
+    "index_seconds": 0.743888917,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mem_mb": 4000,
+    "merge_seconds": 0.228346375,
+    "segments_before_merge": 10,
+    "threads": 10
+  },
+  {
+    "bench": "tantivy-index",
+    "bytes": 915416,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 3738,
+      "idx": 670693,
+      "json": 913,
+      "lock": 0,
+      "pos": 103,
+      "store": 31922,
+      "term": 207901
+    },
+    "corpus": "data/nfcorpus/corpus.jsonl",
+    "docs": 3633,
+    "index_seconds": 0.428929375,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mem_mb": 4000,
+    "merge_seconds": 0.107995958,
+    "segments_before_merge": 10,
+    "threads": 10
+  },
+  {
+    "bench": "tantivy-index",
+    "bytes": 1232239,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 5287,
+      "idx": 887830,
+      "json": 913,
+      "lock": 0,
+      "pos": 103,
+      "store": 63913,
+      "term": 274047
+    },
+    "corpus": "data/scifact/corpus.jsonl",
+    "docs": 5183,
+    "index_seconds": 0.435428125,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mem_mb": 4000,
+    "merge_seconds": 0.112097542,
+    "segments_before_merge": 10,
+    "threads": 10
+  },
+  {
+    "bench": "tantivy-index",
+    "bytes": 25744359,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 171437,
+      "idx": 21086387,
+      "json": 917,
+      "lock": 0,
+      "pos": 103,
+      "store": 2391276,
+      "term": 2094093
+    },
+    "corpus": "data/trec-covid/corpus.jsonl",
+    "docs": 171332,
+    "index_seconds": 2.193982792,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mem_mb": 4000,
+    "merge_seconds": 0.688389917,
+    "segments_before_merge": 10,
+    "threads": 10
+  },
+  {
+    "bench": "tantivy-bm25",
+    "bytes": 1130658441,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 3000105,
+      "idx": 935227558,
+      "json": 919,
+      "lock": 0,
+      "pos": 103,
+      "store": 126045675,
+      "term": 66383935
+    },
+    "dataset": "nq",
+    "docs": 3000000,
+    "k": 10,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mean_ms": 4.864234495654692,
+    "p50_ms": 3.116625,
+    "p99_ms": 25.859209,
+    "qps": {
+      "1": 198.3766137334783,
+      "10": 1056.4109632272518,
+      "4": 620.9754702546769
+    },
+    "queries": 3452,
+    "results_per_query": 10.0,
+    "segments": 1,
+    "timed_queries": 3452,
+    "top_k_shared_with_telusur": 0.6156431054461182
+  },
+  {
+    "bench": "tantivy-bm25",
+    "bytes": 7027626,
+    "bytes_by_extension": {
+      "fast": 145,
+      "fieldnorm": 57743,
+      "idx": 5636286,
+      "json": 915,
+      "lock": 0,
+      "pos": 103,
+      "store": 552913,
+      "term": 779521
+    },
+    "dataset": "fiqa",
+    "docs": 57638,
+    "k": 10,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mean_ms": 0.4504590108024688,
+    "p50_ms": 0.35312499999999997,
+    "p99_ms": 1.747125,
+    "qps": {
+      "1": 2175.530904097857,
+      "10": 13491.182725103487,
+      "4": 7729.46936428217
+    },
+    "queries": 648,
+    "results_per_query": 10.0,
+    "segments": 1,
+    "timed_queries": 1296,
+    "top_k_shared_with_telusur": 0.6544753086419753
+  },
+  {
+    "bench": "tantivy-bm25",
+    "bytes": 915416,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 3738,
+      "idx": 670693,
+      "json": 913,
+      "lock": 0,
+      "pos": 103,
+      "store": 31922,
+      "term": 207901
+    },
+    "dataset": "nfcorpus",
+    "docs": 3633,
+    "k": 10,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mean_ms": 0.01042136377708978,
+    "p50_ms": 0.006625,
+    "p99_ms": 0.059708,
+    "qps": {
+      "1": 83930.21117191923,
+      "10": 205296.6145189961,
+      "4": 246037.8292684088
+    },
+    "queries": 323,
+    "results_per_query": 8.297213622291022,
+    "segments": 1,
+    "timed_queries": 1292,
+    "top_k_shared_with_telusur": 0.7551083591331269
+  },
+  {
+    "bench": "tantivy-bm25",
+    "bytes": 1232239,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 5287,
+      "idx": 887830,
+      "json": 913,
+      "lock": 0,
+      "pos": 103,
+      "store": 63913,
+      "term": 274047
+    },
+    "dataset": "scifact",
+    "docs": 5183,
+    "k": 10,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mean_ms": 0.07136964083333337,
+    "p50_ms": 0.058083,
+    "p99_ms": 0.241,
+    "qps": {
+      "1": 13704.07941711361,
+      "10": 69976.38810061784,
+      "4": 47518.68325728694
+    },
+    "queries": 300,
+    "results_per_query": 10.0,
+    "segments": 1,
+    "timed_queries": 1200,
+    "top_k_shared_with_telusur": 0.8703333333333333
+  },
+  {
+    "bench": "tantivy-bm25",
+    "bytes": 25744359,
+    "bytes_by_extension": {
+      "fast": 146,
+      "fieldnorm": 171437,
+      "idx": 21086387,
+      "json": 917,
+      "lock": 0,
+      "pos": 103,
+      "store": 2391276,
+      "term": 2094093
+    },
+    "dataset": "trec-covid",
+    "docs": 171332,
+    "k": 10,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "mean_ms": 1.0216040389999996,
+    "p50_ms": 0.8163750000000001,
+    "p99_ms": 5.702999999999999,
+    "qps": {
+      "1": 969.7312923075581,
+      "10": 4851.031493017729,
+      "4": 3426.3063479583384
+    },
+    "queries": 50,
+    "results_per_query": 10.0,
+    "segments": 1,
+    "timed_queries": 1000,
+    "top_k_shared_with_telusur": 0.696
+  }
+]

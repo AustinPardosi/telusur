@@ -1,0 +1,21 @@
+$ for s in scifact nfcorpus fiqa trec-covid fineweb; do stat -f "%z %N" indexes/$s/{postings.bin,skips.bin,terms.fst,norms.bin}; done
+794490 indexes/scifact/postings.bin
+12200 indexes/scifact/skips.bin
+417671 indexes/scifact/terms.fst
+5183 indexes/scifact/norms.bin
+593306 indexes/nfcorpus/postings.bin
+8416 indexes/nfcorpus/skips.bin
+316559 indexes/nfcorpus/terms.fst
+3633 indexes/nfcorpus/norms.bin
+4926574 indexes/fiqa/postings.bin
+180600 indexes/fiqa/skips.bin
+1066494 indexes/fiqa/terms.fst
+57638 indexes/fiqa/norms.bin
+18542874 indexes/trec-covid/postings.bin
+677160 indexes/trec-covid/skips.bin
+3018485 indexes/trec-covid/terms.fst
+171332 indexes/trec-covid/norms.bin
+794965041 indexes/fineweb/postings.bin
+34221104 indexes/fineweb/skips.bin
+94166519 indexes/fineweb/terms.fst
+3000000 indexes/fineweb/norms.bin

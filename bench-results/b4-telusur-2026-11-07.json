@@ -1,0 +1,26 @@
+{
+  "bench": "ann",
+  "index": "indexes/dbpedia",
+  "nlist": 2048,
+  "k": 10,
+  "queries": 1000,
+  "timed_queries": 1000,
+  "kernel": "neon",
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+  "runs": [
+    {
+      "nprobe": 256,
+      "rerank_depth": 500,
+      "recall_full": 0.8349999999999936,
+      "recall_rerank": 0.9516999999999965,
+      "codes_scanned_mean": 132996.288,
+      "p50_ms": 0.543041,
+      "p99_ms": 0.691916,
+      "mean_ms": 0.5486114550000003,
+      "qps": {
+        "4": 6391.310885025589,
+        "10": 10078.032512635878
+      }
+    }
+  ]
+}

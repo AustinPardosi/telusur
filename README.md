@@ -43,12 +43,14 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | Codes scored per second, one core (256-dim, best kernel) | 516M (NEON, Apple M4)                 |
 | Speedup over scalar                                      | 11x (NEON, Apple M4)                  |
 | Recall@10 on 1M OpenAI embeddings                        | 0.952 at 0.58 ms p50 (0.835 vs full)  |
+| vs hnswlib HNSW at recall@10 ≥ 0.95                      | 1.5x faster p50, half the bytes       |
 | Hot memory per vector                                    | 37.2 bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
 | Hybrid nDCG@10 (avg of 4 BEIR sets)                      | 56.60 (neural 56.14, BM25 45.72)      |
 | BM25 index size vs naive                                 | 87% smaller (BEIR NQ)                 |
-| Postings decoded, MaxScore vs exhaustive                 | 50% fewer on TREC-COVID, same top-10  |
-| Ingest throughput (FineWeb)                              | 40,198 docs/s on one core (3.47B/day) |
+| BM25 vs Tantivy, same terms                              | 1.3x to 2.7x faster p50, similar size |
+| Postings decoded, MaxScore vs exhaustive                 | 83% fewer on FineWeb 3M, same top-10  |
+| Ingest throughput (FineWeb)                              | 73,346 docs/s on one core (6.34B/day) |
 
 
  
@@ -144,35 +146,36 @@ It turns out that grouping does a second job. Every doc in a tier has the same t
 
  
 
-BEIR test queries, k = 10, Apple M4 ([B7](bench-results/b7-bm25-pruning-2026-11-05.md)). Each cell is exhaustive / MaxScore over tiers; latency is the keyword stage on one thread.
+BEIR test queries, plus BEIR NQ's queries against the 3M FineWeb docs, k = 10, Apple M4 ([B7](bench-results/b7-bm25-pruning-2026-11-05.md) for the setup; timings from the 7 Nov reruns in [B9](bench-results/b9-bm25-vs-tantivy-2026-11-07.md) and [FineWeb](bench-results/fineweb-3m-2026-11-07.md)). Each cell is exhaustive / MaxScore over tiers; latency is the keyword stage on one thread.
 
 
 | Dataset    | Postings decoded per query | p50 ms        | p99 ms        | QPS, 1 thread   |
 | ---------- | -------------------------- | ------------- | ------------- | --------------- |
-| SciFact    | 4,376 / 4,103              | 0.066 / 0.047 | 0.090 / 0.119 | 14,936 / 20,312 |
-| NFCorpus   | 671 / 671                  | 0.012 / 0.009 | 0.050 / 0.035 | 55,005 / 78,495 |
-| FiQA       | 47,742 / 29,959            | 0.634 / 0.374 | 0.864 / 1.497 | 1,750 / 2,230   |
-| TREC-COVID | 182,938 / 91,402           | 1.895 / 1.033 | 2.691 / 5.065 | 540 / 784       |
+| SciFact    | 4,376 / 4,103              | 0.034 / 0.022 | 0.049 / 0.053 | 28,877 / 39,235 |
+| NFCorpus   | 671 / 671                  | 0.006 / 0.005 | 0.027 / 0.019 | 103,470 / 148,408 |
+| FiQA       | 47,742 / 29,959            | 0.321 / 0.189 | 0.416 / 0.758 | 3,457 / 4,487   |
+| TREC-COVID | 182,938 / 91,402           | 0.973 / 0.527 | 1.372 / 2.575 | 1,055 / 1,530   |
+| FineWeb 3M | 2,729,739 / 475,726        | 17.03 / 2.39  | 24.99 / 13.96 | 60 / 315        |
 
-MaxScore wins on p50 and throughput everywhere, but loses p99 on long queries (9 to 20 terms), where every candidate probes many dense tiers. Block-max bounds inside tiers are the next step.
+The bigger the corpus, the more it skips: 50% of postings on TREC-COVID, 83% on FineWeb 3M, where it is 7.1x faster at p50. On three of the four BEIR sets it loses p99 on long queries (9 to 20 terms), where every candidate probes many dense tiers. On FineWeb it wins p99 too. Block-max bounds inside tiers are the next step.
 
 
  
 
-Memory, step by step (like Exa's post), on BEIR NQ: 2.68M docs, 118.6M postings, Apple M4 ([B8](bench-results/b8-ablate-postings-2026-11-05.md)). Each row counts postings, dictionary and doc lengths.
+Memory, step by step (like Exa's post), on BEIR NQ (2.68M docs, 118.6M postings) and FineWeb 3M (581.8M postings), Apple M4 ([B8](bench-results/b8-ablate-postings-2026-11-05.md), [FineWeb](bench-results/fineweb-3m-2026-11-07.md)). Each row counts postings, dictionary and doc lengths.
 
  
 
 
-| Format                                            | Bytes per posting |
-| ------------------------------------------------- | ----------------- |
-| `HashMap<String, Vec<(u32, u32)>>`                | 12.69             |
-| + one flat buffer                                 | 8.89              |
-| + delta varint doc ids                            | 6.20              |
-| + tf tiers                                        | 2.42              |
-| + inline singletons, FST dictionary, 1-byte norms | 1.64              |
+| Format                                            | Bytes per posting, NQ | FineWeb 3M |
+| ------------------------------------------------- | --------------------- | ---------- |
+| `HashMap<String, Vec<(u32, u32)>>`                | 12.69                 | 12.48      |
+| + one flat buffer                                 | 8.89                  | 8.71       |
+| + delta varint doc ids                            | 6.20                  | 5.93       |
+| + tf tiers                                        | 2.42                  | 2.20       |
+| + inline singletons, FST dictionary, 1-byte norms | 1.64                  | 1.59       |
 
-That is 87% smaller than naive. The delta varint row still keeps a 4-byte tf per posting; against a varint tf, tiers cut postings bytes by 34%.
+That is 87% smaller than naive on both (926 MB vs 7.26 GB on FineWeb). The delta varint row still keeps a 4-byte tf per posting; against a varint tf, tiers cut postings bytes by 34% (NQ) and 33% (FineWeb).
 
 
  
@@ -195,6 +198,20 @@ Filters (domain, crawl date range, any keyword field) are roaring bitmaps. If a 
 | 50%         | 3.51   | 0.961     | 513 clusters |
 
 DBpedia 1M with synthetic categories, neural search at the defaults, Apple M4 ([B5](bench-results/b5-filters-dbpedia-2026-11-05.md)). Recall is against the exact top 10 among the allowed docs. At 1% the exact path takes 3.7x the unfiltered latency, so it misses the 2x target; 10% and 50% probe nearly every cluster.
+
+Keyword search with real web filters, on FineWeb 3M with NQ's queries ([B5](bench-results/fineweb-3m-2026-11-07.md)):
+
+| Filter                          | Selectivity | p50 ms | vs none |
+| ------------------------------- | ----------- | ------ | ------- |
+| none                            | 100%        | 2.39   | 1.00x   |
+| the biggest domain              | 0.13%       | 3.25   | 1.36x   |
+| the 18 biggest domains          | 1.03%       | 3.17   | 1.33x   |
+| 20 days of crawl                | 0.10%       | 7.07   | 2.96x   |
+| a year of crawl                 | 1.00%       | 2.98   | 1.25x   |
+| 3 months of crawl               | 10.0%       | 3.29   | 1.38x   |
+| 4.4 years of crawl              | 50.0%       | 5.78   | 2.42x   |
+
+Filtered MaxScore returns the same top 10 as filtered exhaustive search on every query, and 1% stays under the 2x target. Narrow date ranges are the weak spot. FineWeb's crawl dates come in runs along doc id order, and MaxScore cannot prune until it holds k allowed hits. Until the cursors reach those runs, it decodes nearly everything. Letting cursors jump to the next allowed doc would fix that.
 
 
  
@@ -242,11 +259,13 @@ Rules I hold myself to: release build, warm cache, single-thread latency over 1,
 | Kernel throughput           | `cargo bench --bench kernels`                                      |
 | First-stage scorer ablation | `telusur bench ablate-quant --base data/dbpedia/base.fbin ...`     |
 | ANN recall vs latency       | `telusur bench ann --index indexes/dbpedia --queries ... --gt ...` |
+| ANN vs FAISS and hnswlib    | `scripts/compare_faiss.py data/dbpedia`                            |
 | Filters                     | `telusur bench filters ...`                                        |
 | BM25 quality                | `telusur eval beir --data data/<set> --index indexes/<set>`        |
 | Keyword, neural, hybrid quality | `telusur eval beir ... --query-vectors data/<set>/queries.fbin` |
 | HTTP latency per stage      | `telusur bench http --queries ...` against `telusur serve`         |
 | BM25 speed + memory         | `telusur bench bm25 ...` and `telusur bench ablate-postings ...`   |
+| BM25 vs Tantivy             | `telusur-tantivy index ...` and `bench ...` (in `compare/tantivy`) |
 | Ingest                      | `telusur ingest fineweb --parquet data/fineweb --out ...`          |
 
 
@@ -273,6 +292,24 @@ Neural uses nomic-embed-text-v1.5 on CPU (768 dims), searched at the index defau
 
  
 
+### BM25 vs Tantivy
+
+ 
+
+Tantivy 0.27 on the same machine, fed through telusur's analyzer so both index the same terms: one field, no positions, one segment ([B9](bench-results/b9-bm25-vs-tantivy-2026-11-07.md)). Each cell is telusur / Tantivy. Index bytes are postings, dictionary and doc lengths.
+
+| Dataset    | p50 ms        | p99 ms        | QPS, 1 thread    | Index bytes       |
+| ---------- | ------------- | ------------- | ---------------- | ----------------- |
+| SciFact    | 0.022 / 0.058 | 0.053 / 0.241 | 39,234 / 13,704  | 1.23 MB / 1.17 MB |
+| NFCorpus   | 0.005 / 0.007 | 0.019 / 0.060 | 148,407 / 83,930 | 0.92 MB / 0.88 MB |
+| FiQA       | 0.189 / 0.353 | 0.758 / 1.747 | 4,487 / 2,175    | 6.23 MB / 6.47 MB |
+| TREC-COVID | 0.527 / 0.816 | 2.575 / 5.703 | 1,529 / 969      | 22.4 MB / 23.4 MB |
+| FineWeb 3M | 2.39 / 3.12   | 13.96 / 25.86 | 315 / 198        | 926 MB / 1,005 MB |
+
+On the small sets the gap is mostly per-query overhead: even telusur's exhaustive search beats Tantivy there. FineWeb tests the pruning: Tantivy's block-max WAND cuts exhaustive search from 17.03 ms to 3.12, and MaxScore over tiers gets it to 2.39, with half Tantivy's p99. The two engines don't score the same: Tantivy fixes BM25 at k1 1.2, b 0.75, against Anserini's 0.9 and 0.4. So 62% to 87% of their top 10s match, and each prunes against its own scores.
+
+ 
+
 ### ANN on 1M OpenAI embeddings
 
  
@@ -294,19 +331,28 @@ The defaults, 256 clusters probed and a rerank depth of 500, are the smallest th
 
  
 
-Compared with FAISS and hnswlib on the same machine: TBD.
+Against FAISS and hnswlib on the same machine, each at the cheapest setting that reaches recall@10 ≥ 0.95, given the same 1024-dim vectors ([B4](bench-results/b4-ann-vs-others-2026-11-07.md)):
+
+| Engine                            | Recall@10 | p50 ms | QPS, 10 threads | Index bytes         |
+| --------------------------------- | --------- | ------ | --------------- | ------------------- |
+| telusur                           | 0.952     | 0.54   | 10,078          | 2.09 GB (39 MB hot) |
+| hnswlib HNSW (M 16, ef 64)        | 0.956     | 0.81   | 7,472           | 4.24 GB             |
+| FAISS IndexIVFFlat (128 lists)    | 0.972     | 4.34   | 421             | 4.11 GB             |
+| FAISS IndexBinaryIVF + rerank 500 | 0.868 max | 0.63   |                 | 4.13 GB             |
+
+Only telusur's codes, ids and centroids (39 MB) need to stay in RAM; the f16 rerank vectors are memory-mapped and read for 500 candidates per query. The FAISS binary row is telusur's design with Hamming distance in place of the float-query scan. It never reaches 0.95, even probing 512 clusters. hnswlib has hand-written SIMD only for x86, so this ARM run probably understates it.
 
 ### HTTP latency
 
-One client, one request at a time over localhost, k = 10, 1,000 requests per mode, Apple M4 ([B12](bench-results/b12-http-2026-11-06.md), per-stage split there). On DBpedia 1M the request carries the query vector. On TREC-COVID the server embeds the query text through the nomic sidecar on CPU.
+One client, one request at a time over localhost, k = 10, 1,000 requests per mode, Apple M4 ([B12](bench-results/b12-http-2026-11-07.md), per-stage split there). On DBpedia 1M the request carries the query vector. On TREC-COVID the server embeds the query text through the nomic sidecar on CPU.
 
 | Mode    | DBpedia 1M p50 / p99 ms | TREC-COVID, server embeds, p50 / p99 ms |
 | ------- | ----------------------- | --------------------------------------- |
-| keyword | 0.23 / 1.48             | 1.18 / 5.15                             |
-| neural  | 1.61 / 2.20             | 23.66 / 77.02                           |
-| hybrid  | 1.64 / 3.61             | 24.78 / 78.09                           |
+| keyword | 0.16 / 0.75             | 0.60 / 2.55                             |
+| neural  | 0.75 / 0.82             | 11.55 / 18.18                           |
+| hybrid  | 0.79 / 1.16             | 12.28 / 22.91                           |
 
-HTTP and JSON add 0.1 to 0.2 ms. Hybrid costs about the same as neural, because the keyword search runs in parallel. When the server embeds, the embedder is about 90% of the time (22 ms p50), and the search itself takes about 1 ms.
+HTTP and JSON add 0.1 to 0.2 ms, and the server's neural search runs at in-process speed. Hybrid costs about the same as neural, because the keyword search runs in parallel. When the server embeds, the embedder is over 90% of the time (10.7 ms p50), and the search itself takes under 1 ms.
 
  
 
@@ -319,11 +365,13 @@ HTTP and JSON add 0.1 to 0.2 ms. Hybrid costs about the same as neural, because 
 | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
 | [DBpedia 1M, OpenAI text-embedding-3-large](https://huggingface.co/datasets/Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M) | ANN speed, recall, memory            | 24.8 GB            |
 | [BEIR](https://github.com/beir-cellar/beir): SciFact, NFCorpus, FiQA, TREC-COVID                                                            | Retrieval quality                    | small to 171k docs |
-| [FineWeb sample-10BT](https://huggingface.co/datasets/HuggingFaceFW/fineweb)                                                                | Ingest throughput, web-style filters | 27.6 GB            |
+| [FineWeb sample-10BT](https://huggingface.co/datasets/HuggingFaceFW/fineweb)                                                                | Ingest, BM25 at 3M docs, web filters | 27.6 GB            |
 | Synthetic                                                                                                                                   | Tests and CI                         | generated          |
 
 
  
+
+FineWeb is used at N = 3M docs: the first three of its parquet files. The keyword build is one pass in memory, and probe builds of 1M and 2M docs measured about 2.4 GB of peak memory per million docs. 3M (6.93 GB measured) fits a 16 GB laptop next to everything else; 4M (about 10 GB) would not ([details](bench-results/fineweb-3m-2026-11-07.md)). Past that, the build would need segments and a merge.
 
 FineWeb is released under ODC-By 1.0 and is subject to Common Crawl's terms of use.
 

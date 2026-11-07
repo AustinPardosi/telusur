@@ -1,0 +1,154 @@
+[
+  {
+    "bench": "bm25",
+    "dataset": "scifact",
+    "k": 10,
+    "queries": 300,
+    "queries_3plus_terms": 300,
+    "timed_queries": 1200,
+    "mismatched_queries": 0,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "strategies": [
+      {
+        "strategy": "exhaustive",
+        "postings_decoded_mean": 4375.87,
+        "postings_decoded_mean_3plus_terms": 4375.87,
+        "p50_ms": 0.034083,
+        "p99_ms": 0.048625,
+        "mean_ms": 0.03304986666666668,
+        "qps": {
+          "1": 28877.397246303375,
+          "4": 106631.12295901366,
+          "10": 170974.26837260992
+        }
+      },
+      {
+        "strategy": "maxscore",
+        "postings_decoded_mean": 4102.636666666666,
+        "postings_decoded_mean_3plus_terms": 4102.636666666666,
+        "p50_ms": 0.021625000000000002,
+        "p99_ms": 0.05275,
+        "mean_ms": 0.02349007833333335,
+        "qps": {
+          "1": 39234.57708228706,
+          "4": 113872.4289455971,
+          "10": 184629.8255081982
+        }
+      }
+    ]
+  },
+  {
+    "bench": "bm25",
+    "dataset": "nfcorpus",
+    "k": 10,
+    "queries": 323,
+    "queries_3plus_terms": 148,
+    "timed_queries": 1292,
+    "mismatched_queries": 0,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "strategies": [
+      {
+        "strategy": "exhaustive",
+        "postings_decoded_mean": 671.1671826625387,
+        "postings_decoded_mean_3plus_terms": 1247.4054054054054,
+        "p50_ms": 0.006,
+        "p99_ms": 0.026792,
+        "mean_ms": 0.008348335913312698,
+        "qps": {
+          "1": 103470.36894538371,
+          "4": 327861.23126204545,
+          "10": 516232.144640895
+        }
+      },
+      {
+        "strategy": "maxscore",
+        "postings_decoded_mean": 671.1671826625387,
+        "postings_decoded_mean_3plus_terms": 1247.4054054054054,
+        "p50_ms": 0.004625,
+        "p99_ms": 0.019417,
+        "mean_ms": 0.005696358359133133,
+        "qps": {
+          "1": 148407.80479861706,
+          "4": 468374.73604074714,
+          "10": 628883.8567363634
+        }
+      }
+    ]
+  },
+  {
+    "bench": "bm25",
+    "dataset": "fiqa",
+    "k": 10,
+    "queries": 648,
+    "queries_3plus_terms": 644,
+    "timed_queries": 1296,
+    "mismatched_queries": 0,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "strategies": [
+      {
+        "strategy": "exhaustive",
+        "postings_decoded_mean": 47742.48611111111,
+        "postings_decoded_mean_3plus_terms": 48006.798136645964,
+        "p50_ms": 0.32087499999999997,
+        "p99_ms": 0.4165,
+        "mean_ms": 0.28789834490740723,
+        "qps": {
+          "1": 3456.646853847917,
+          "4": 12826.941848011993,
+          "10": 23978.859349491584
+        }
+      },
+      {
+        "strategy": "maxscore",
+        "postings_decoded_mean": 29958.572530864196,
+        "postings_decoded_mean_3plus_terms": 30123.656832298137,
+        "p50_ms": 0.18933399999999997,
+        "p99_ms": 0.7576250000000001,
+        "mean_ms": 0.22173826543209896,
+        "qps": {
+          "1": 4487.367981227151,
+          "4": 15693.403858683,
+          "10": 29907.81884077202
+        }
+      }
+    ]
+  },
+  {
+    "bench": "bm25",
+    "dataset": "trec-covid",
+    "k": 10,
+    "queries": 50,
+    "queries_3plus_terms": 50,
+    "timed_queries": 1000,
+    "mismatched_queries": 0,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+    "strategies": [
+      {
+        "strategy": "exhaustive",
+        "postings_decoded_mean": 182937.64,
+        "postings_decoded_mean_3plus_terms": 182937.64,
+        "p50_ms": 0.973083,
+        "p99_ms": 1.371625,
+        "mean_ms": 0.9465188830000002,
+        "qps": {
+          "1": 1054.8686037069888,
+          "4": 3971.0754804157473,
+          "10": 6334.835322788366
+        }
+      },
+      {
+        "strategy": "maxscore",
+        "postings_decoded_mean": 91401.78,
+        "postings_decoded_mean_3plus_terms": 91401.78,
+        "p50_ms": 0.527166,
+        "p99_ms": 2.574875,
+        "mean_ms": 0.6477306539999999,
+        "qps": {
+          "1": 1529.8933317857504,
+          "4": 5267.688106508439,
+          "10": 7617.124714361822
+        }
+      }
+    ]
+  }
+]

@@ -6,32 +6,32 @@
   "queries_3plus_terms": 3451,
   "timed_queries": 3452,
   "mismatched_queries": 0,
-  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64",
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
   "strategies": [
     {
       "strategy": "exhaustive",
       "postings_decoded_mean": 2729739.00811124,
       "postings_decoded_mean_3plus_terms": 2730391.931614025,
-      "p50_ms": 30.853209,
-      "p99_ms": 43.16275,
-      "mean_ms": 30.014343298667487,
+      "p50_ms": 17.033,
+      "p99_ms": 24.991709,
+      "mean_ms": 16.457584183371985,
       "qps": {
-        "1": 34.355637798916995,
-        "4": 86.08984421614748,
-        "10": 121.75515938355728
+        "1": 59.975919242754856,
+        "4": 164.50243475311126,
+        "10": 195.78554856500153
       }
     },
     {
       "strategy": "maxscore",
       "postings_decoded_mean": 475725.91454229434,
       "postings_decoded_mean_3plus_terms": 475844.232975949,
-      "p50_ms": 4.618334,
-      "p99_ms": 26.966334,
-      "mean_ms": 6.264611516801847,
+      "p50_ms": 2.385916,
+      "p99_ms": 13.9635,
+      "mean_ms": 3.2183139052723013,
       "qps": {
-        "1": 158.02865069175124,
-        "4": 482.47920907748363,
-        "10": 849.7299653727742
+        "1": 315.0816041464072,
+        "4": 1050.4508353256006,
+        "10": 1798.9864935764995
       }
     }
   ]

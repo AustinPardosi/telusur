@@ -1,0 +1,58 @@
+{
+  "bench": "ablate-postings",
+  "corpus": "data/fineweb/corpus.jsonl",
+  "docs": 3000000,
+  "terms": 5967917,
+  "postings": 581804457,
+  "steps": [
+    {
+      "format": "HashMap<String, Vec<(u32, u32)>>",
+      "postings": 6783531072,
+      "term_table": 411041808,
+      "term_strings": 57208517,
+      "doc_lengths": 12000000,
+      "total": 7263781397,
+      "bytes_per_posting": 12.484918789475689
+    },
+    {
+      "format": "+ one flat buffer, (offset, len) per term",
+      "postings": 4654435656,
+      "term_table": 343932944,
+      "term_strings": 57208517,
+      "doc_lengths": 12000000,
+      "total": 5067577117,
+      "bytes_per_posting": 8.710103637105687
+    },
+    {
+      "format": "+ delta varint doc ids",
+      "postings": 3034233006,
+      "term_table": 343932944,
+      "term_strings": 57208517,
+      "doc_lengths": 12000000,
+      "total": 3447374467,
+      "bytes_per_posting": 5.92531464055113
+    },
+    {
+      "format": "+ tf tiers (with headers and skips)",
+      "postings": 869440497,
+      "term_table": 343932944,
+      "term_strings": 57208517,
+      "doc_lengths": 12000000,
+      "total": 1282581958,
+      "bytes_per_posting": 2.2044897431921875
+    },
+    {
+      "format": "+ inline singletons, FST dictionary, 1-byte norms (the index files)",
+      "postings": 829186145,
+      "term_table": 0,
+      "term_strings": 94166519,
+      "doc_lengths": 3000000,
+      "total": 926352664,
+      "bytes_per_posting": 1.5922062006479267
+    }
+  ],
+  "final_vs_naive": 0.12753036102966853,
+  "at_least_50_percent_smaller": true,
+  "delta_varint_tf_postings": 1288847904,
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+}
