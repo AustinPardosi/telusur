@@ -45,9 +45,10 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | Recall@10 on 1M OpenAI embeddings                        | 0.952 at 0.58 ms p50 (0.835 vs full)  |
 | Hot memory per vector                                    | 37.2 bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
+| Hybrid nDCG@10 (avg of 4 BEIR sets)                      | 56.60 (neural 56.14, BM25 45.72)      |
 | BM25 index size vs naive                                 | 87% smaller (BEIR NQ)                 |
 | Postings decoded, MaxScore vs exhaustive                 | 50% fewer on TREC-COVID, same top-10  |
-| Ingest throughput (FineWeb)                              | TBD docs/s (TBD docs/day)             |
+| Ingest throughput (FineWeb)                              | 40,198 docs/s on one core (3.47B/day) |
 
 
  
@@ -251,22 +252,24 @@ Rules I hold myself to: release build, warm cache, single-thread latency over 1,
 
  
 
-### BM25 quality (nDCG@10)
+### Search quality (nDCG@10)
 
  
 
 
 | Dataset    | Anserini BM25 | telusur BM25 | telusur neural | telusur hybrid |
 | ---------- | ------------- | ------------ | -------------- | -------------- |
-| SciFact    | 67.89         | 67.89        | TBD            | TBD            |
-| NFCorpus   | 32.18         | 32.05        | TBD            | TBD            |
-| FiQA       | 23.61         | 23.61        | TBD            | TBD            |
-| TREC-COVID | 59.47         | 59.35        | TBD            | TBD            |
+| SciFact    | 67.89         | 67.89        | 70.33          | 73.85          |
+| NFCorpus   | 32.18         | 32.05        | 34.56          | 35.83          |
+| FiQA       | 23.61         | 23.61        | 37.48          | 35.24          |
+| TREC-COVID | 59.47         | 59.35        | 82.19          | 81.50          |
 
 
  
 
 Anserini reference: the [BEIR (v1.0.0) flat BM25 regressions](https://github.com/castorini/anserini/tree/master/docs/reproduce/from-document-collection), k1=0.9, b=0.4. telusur's eval follows the same setup: title and text as one field, results matching the query id dropped, `trec_eval -c`. Measured on the Apple M4 ([B6](bench-results/b6-bm25-parity-2026-11-05.md)). Recall@100 matches Anserini on all four sets. NFCorpus and TREC-COVID are 0.13 and 0.12 below on nDCG@10, but plain Lucene 10.5 with the same setup lands where telusur does, so the gap is between today's Lucene and Anserini's reference run, which was recorded with Lucene 8.11 in 2022.
+
+Neural uses nomic-embed-text-v1.5 on CPU (768 dims), searched at the index defaults. Hybrid is RRF over the top 1000 of each ([B10](bench-results/b10-hybrid-beir-2026-11-06.md)). Hybrid beats the better single mode on SciFact and NFCorpus, where BM25 and neural are close. It falls a little behind neural on FiQA and TREC-COVID, where BM25 is 14 and 23 points worse. That misses the PRD target of 3 of 4 sets. Its average (56.60) is still the best of the three modes (neural 56.14, BM25 45.72).
 
  
 
@@ -292,6 +295,18 @@ The defaults, 256 clusters probed and a rerank depth of 500, are the smallest th
  
 
 Compared with FAISS and hnswlib on the same machine: TBD.
+
+### HTTP latency
+
+One client, one request at a time over localhost, k = 10, 1,000 requests per mode, Apple M4 ([B12](bench-results/b12-http-2026-11-06.md), per-stage split there). On DBpedia 1M the request carries the query vector. On TREC-COVID the server embeds the query text through the nomic sidecar on CPU.
+
+| Mode    | DBpedia 1M p50 / p99 ms | TREC-COVID, server embeds, p50 / p99 ms |
+| ------- | ----------------------- | --------------------------------------- |
+| keyword | 0.23 / 1.48             | 1.18 / 5.15                             |
+| neural  | 1.61 / 2.20             | 23.66 / 77.02                           |
+| hybrid  | 1.64 / 3.61             | 24.78 / 78.09                           |
+
+HTTP and JSON add 0.1 to 0.2 ms. Hybrid costs about the same as neural, because the keyword search runs in parallel. When the server embeds, the embedder is about 90% of the time (22 ms p50), and the search itself takes about 1 ms.
 
  
 

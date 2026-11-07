@@ -1,0 +1,28 @@
+$ /usr/bin/time -l telusur index --corpus data/fineweb/corpus.jsonl --out indexes/fineweb --keyword-fields domain --date-field crawl_date
+indexed 3000000 docs into indexes/fineweb in 786.4s
+part                                  bytes    bytes/doc
+postings                          794965041       264.99
+skip entries                       34221104        11.41
+term dictionary                    94166519        31.39
+doc length norms                    3000000         1.00
+doc store                         969392894       323.13
+doc store offsets                  24000008         8.00
+keyword stats                            44         0.00
+      786.47 real       762.92 user        17.34 sys
+          3598909440  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1380994  page reclaims
+                  25  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 139  voluntary context switches
+              265339  involuntary context switches
+       6490494075466  instructions retired
+       1632879056871  cycles elapsed
+          6924442080  peak memory footprint

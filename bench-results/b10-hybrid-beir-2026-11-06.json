@@ -1,0 +1,110 @@
+[
+  {
+    "dataset": "scifact",
+    "mode": "keyword",
+    "queries": 300,
+    "ndcg_at_10": 0.6789094274508308,
+    "recall_at_100": 0.9253333333333335,
+    "seconds": 0.166020584,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "scifact",
+    "mode": "neural",
+    "queries": 300,
+    "ndcg_at_10": 0.7032645580064156,
+    "recall_at_100": 0.93,
+    "seconds": 0.344521042,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "scifact",
+    "mode": "hybrid",
+    "queries": 300,
+    "ndcg_at_10": 0.7385415882206634,
+    "recall_at_100": 0.955,
+    "seconds": 0.415738667,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "nfcorpus",
+    "mode": "keyword",
+    "queries": 323,
+    "ndcg_at_10": 0.32052581496512844,
+    "recall_at_100": 0.24567990783971777,
+    "seconds": 0.060037,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "nfcorpus",
+    "mode": "neural",
+    "queries": 323,
+    "ndcg_at_10": 0.3456188360350062,
+    "recall_at_100": 0.2932162727983098,
+    "seconds": 0.256835833,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "nfcorpus",
+    "mode": "hybrid",
+    "queries": 323,
+    "ndcg_at_10": 0.35825383222018686,
+    "recall_at_100": 0.3072749149591823,
+    "seconds": 0.293418125,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "fiqa",
+    "mode": "keyword",
+    "queries": 648,
+    "ndcg_at_10": 0.23606680758494006,
+    "recall_at_100": 0.5394860497869758,
+    "seconds": 0.716929917,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "fiqa",
+    "mode": "neural",
+    "queries": 648,
+    "ndcg_at_10": 0.3748143738232127,
+    "recall_at_100": 0.6689201958877883,
+    "seconds": 0.941141333,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "fiqa",
+    "mode": "hybrid",
+    "queries": 648,
+    "ndcg_at_10": 0.35235757041489174,
+    "recall_at_100": 0.667724820618339,
+    "seconds": 0.927251292,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "trec-covid",
+    "mode": "keyword",
+    "queries": 50,
+    "ndcg_at_10": 0.5934527405540646,
+    "recall_at_100": 0.10913757917307082,
+    "seconds": 0.148242875,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "trec-covid",
+    "mode": "neural",
+    "queries": 50,
+    "ndcg_at_10": 0.8218608278902728,
+    "recall_at_100": 0.14483132805542695,
+    "seconds": 0.097711334,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  },
+  {
+    "dataset": "trec-covid",
+    "mode": "hybrid",
+    "queries": 50,
+    "ndcg_at_10": 0.8149868336291992,
+    "recall_at_100": 0.14924254245051854,
+    "seconds": 0.15309,
+    "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64"
+  }
+]

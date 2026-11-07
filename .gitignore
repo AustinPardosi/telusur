@@ -2,3 +2,4 @@
 /data
 /indexes
 /compare/tantivy/target
+__pycache__/
