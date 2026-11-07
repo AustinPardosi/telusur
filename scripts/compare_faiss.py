@@ -118,7 +118,11 @@ def sweep(name, settings, set_knob, one, queries, gts, extra_bytes=0, write=None
 def machine():
     cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip()
     ram = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout or 0)
-    return f"{cpu or platform.processor()}, {os.cpu_count()} cores, {ram // 2**30} GB RAM, {platform.system()} {platform.machine()}"
+    pmset = lambda *a: subprocess.run(["pmset", *a], capture_output=True, text=True).stdout
+    power = "AC power" if "AC Power" in pmset("-g", "ps") else "battery"
+    if any(line.split() == ["lowpowermode", "1"] for line in pmset("-g").splitlines()):
+        power += ", Low Power Mode"
+    return f"{cpu or platform.processor()}, {os.cpu_count()} cores, {ram // 2**30} GB RAM, {platform.system()} {platform.machine()}, {power}"
 
 
 def main(args):

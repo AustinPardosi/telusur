@@ -228,9 +228,29 @@ pub fn hardware() -> String {
             .and_then(|v| v.trim_end_matches(" kB").parse::<u64>().ok());
         (cpu, kb.unwrap_or(0) * 1024)
     };
+    // A laptop on battery may be in Low Power Mode, which slows the CPU, so say which.
+    let power = if cfg!(target_os = "macos") {
+        let pmset = |args: &[&str]| {
+            Command::new("pmset")
+                .args(args)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default()
+        };
+        let source = match pmset(&["-g", "ps"]).contains("AC Power") {
+            true => "AC power",
+            false => "battery",
+        };
+        let low = pmset(&["-g"])
+            .lines()
+            .any(|l| l.split_whitespace().eq(["lowpowermode", "1"]));
+        format!(", {source}{}", if low { ", Low Power Mode" } else { "" })
+    } else {
+        String::new()
+    };
     let cores = std::thread::available_parallelism().map_or(0, |n| n.get());
     format!(
-        "{cpu}, {cores} cores, {} GB RAM, {} {}",
+        "{cpu}, {cores} cores, {} GB RAM, {} {}{power}",
         ram_bytes >> 30,
         std::env::consts::OS,
         std::env::consts::ARCH
