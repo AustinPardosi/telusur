@@ -465,7 +465,7 @@ telusur/
 | D1 is a 24.8 GB download and 12 GB on disk                       | Start the download on day 1. Delete the parquet after prep; keep the full-dim `base.fbin` (12 GB)   |
 | Embedding FineWeb is slow on a laptop                            | Neural only on a separate 1M-doc index; keyword and ingest on the first N docs                     |
 | A keyword build of millions of docs exceeds 16 GB RAM            | Measure a 1M build first and pick N to fit; segment-and-merge is the upgrade path                  |
-| NEON or AVX-512 only testable on some machines                   | CI on macos-14 and ubuntu; one CI job runs kernel tests under Intel SDE with AVX-512 forced        |
+| NEON or AVX-512 only testable on some machines                   | CI on macOS (arm64) and ubuntu; one CI job runs kernel tests under Intel SDE with AVX-512 forced        |
 | Recall lower than target at 1024-dim rerank vs 3072 ground truth | Report both ground truths; offer full-dim rerank as an option                                      |
 | BM25 parity off by more than a point                             | Check analyzer, SmallFloat norms, idf, k1/b, `-removeQuery`, `trec_eval -c`                        |
 | Unfair comparisons                                               | Same machine, same queries, same k, published configs, say what differs                            |
