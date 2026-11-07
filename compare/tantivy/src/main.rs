@@ -23,9 +23,7 @@ use tantivy::{
     doc,
     indexer::NoMergePolicy,
     query::{BooleanQuery, Occur, Query, TermQuery},
-    schema::{
-        IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value as _,
-    },
+    schema::{IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions, Value as _},
     tokenizer::{TextAnalyzer, Token, TokenStream, Tokenizer},
 };
 use telusur::{
@@ -128,7 +126,8 @@ fn sizes(dir: &Path) -> Result<(BTreeMap<String, u64>, u64)> {
 
 fn index(corpus: &Path, out: &Path, threads: usize, mem_mb: usize) -> Result<Value> {
     let mut schema = Schema::builder();
-    let id = schema.add_text_field("id", STRING | STORED);
+    // Stored, not indexed: telusur keeps the external id in its doc store, not its postings.
+    let id = schema.add_text_field("id", STORED);
     let indexing = TextFieldIndexing::default()
         .set_tokenizer(TOKENIZER)
         .set_index_option(IndexRecordOption::WithFreqs);
