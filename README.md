@@ -201,17 +201,17 @@ DBpedia 1M with synthetic categories, neural search at the defaults, Apple M4 ([
 
 Keyword search with real web filters, on FineWeb 3M with NQ's queries ([B5](bench-results/fineweb-3m-2026-11-07.md)):
 
-| Filter                          | Selectivity | p50 ms | vs none |
-| ------------------------------- | ----------- | ------ | ------- |
-| none                            | 100%        | 2.39   | 1.00x   |
-| the biggest domain              | 0.13%       | 3.25   | 1.36x   |
-| the 18 biggest domains          | 1.03%       | 3.17   | 1.33x   |
-| 20 days of crawl                | 0.10%       | 7.07   | 2.96x   |
-| a year of crawl                 | 1.00%       | 2.98   | 1.25x   |
-| 3 months of crawl               | 10.0%       | 3.29   | 1.38x   |
-| 4.4 years of crawl              | 50.0%       | 5.78   | 2.42x   |
+| Filter                 | Selectivity | p50 ms | vs none |
+| ---------------------- | ----------- | ------ | ------- |
+| none                   | 100%        | 2.73   | 1.00x   |
+| the biggest domain     | 0.13%       | 2.95   | 1.08x   |
+| the 18 biggest domains | 1.03%       | 3.55   | 1.30x   |
+| 20 days of crawl       | 0.10%       | 1.67   | 0.61x   |
+| a year of crawl        | 1.00%       | 2.04   | 0.75x   |
+| 3 months of crawl      | 10.0%       | 2.63   | 0.97x   |
+| 4.4 years of crawl     | 50.0%       | 2.92   | 1.07x   |
 
-Filtered MaxScore returns the same top 10 as filtered exhaustive search on every query, and 1% stays under the 2x target. Narrow date ranges are the weak spot. FineWeb's crawl dates come in runs along doc id order, and MaxScore cannot prune until it holds k allowed hits. Until the cursors reach those runs, it decodes nearly everything. Letting cursors jump to the next allowed doc would fix that.
+Filtered MaxScore returns the same top 10 as filtered exhaustive search on every query. Narrow date ranges beat no filter: FineWeb's crawl dates come in runs along doc id order, and each MaxScore window starts at the next doc the filter allows, so cursors skip whole runs. A date range is the union of a few precomputed blocks of days, so even 50% costs little to build. Before that change, 20 days of crawl took 2.96x and 4.4 years 2.42x. This run was on battery, which is why "none" is slower than in the BM25 table above.
 
 
  

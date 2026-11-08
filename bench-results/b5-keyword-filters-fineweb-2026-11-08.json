@@ -1,0 +1,81 @@
+{
+  "bench": "keyword-filters",
+  "index": "indexes/fineweb",
+  "docs": 3000000,
+  "queries_from": "data/nq",
+  "queries": 3452,
+  "k": 10,
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, battery",
+  "runs": [
+    {
+      "filter": "no filter",
+      "selectivity": 1.0,
+      "docs_allowed": 3000000,
+      "postings_decoded_mean": 475725.91454229434,
+      "mismatched_queries": 0,
+      "p50_ms": 2.728792,
+      "p99_ms": 14.94275,
+      "mean_ms": 3.5184170857473904
+    },
+    {
+      "filter": "the 1 biggest domains",
+      "selectivity": 0.001301,
+      "docs_allowed": 3903,
+      "postings_decoded_mean": 492754.16193511005,
+      "mismatched_queries": 0,
+      "p50_ms": 2.9535839999999998,
+      "p99_ms": 9.052292,
+      "mean_ms": 3.3829999858053217
+    },
+    {
+      "filter": "the 18 biggest domains",
+      "selectivity": 0.010257333333333334,
+      "docs_allowed": 30772,
+      "postings_decoded_mean": 483915.26100811124,
+      "mismatched_queries": 0,
+      "p50_ms": 3.5528750000000002,
+      "p99_ms": 11.439124999999999,
+      "mean_ms": 4.059598058516801
+    },
+    {
+      "filter": "crawl_date 2019-09-24 to 2019-10-13",
+      "selectivity": 0.0009973333333333334,
+      "docs_allowed": 2992,
+      "postings_decoded_mean": 297566.8763035921,
+      "mismatched_queries": 0,
+      "p50_ms": 1.673541,
+      "p99_ms": 3.816625,
+      "mean_ms": 1.7892485185399751
+    },
+    {
+      "filter": "crawl_date 2014-03-11 to 2015-03-26",
+      "selectivity": 0.010002666666666667,
+      "docs_allowed": 30008,
+      "postings_decoded_mean": 322671.34385863267,
+      "mismatched_queries": 0,
+      "p50_ms": 2.044041,
+      "p99_ms": 7.3465,
+      "mean_ms": 2.3617670399768245
+    },
+    {
+      "filter": "crawl_date 2020-10-23 to 2021-01-21",
+      "selectivity": 0.099997,
+      "docs_allowed": 299991,
+      "postings_decoded_mean": 474806.0060834299,
+      "mismatched_queries": 0,
+      "p50_ms": 2.6344160000000003,
+      "p99_ms": 8.474874999999999,
+      "mean_ms": 3.0065914522016213
+    },
+    {
+      "filter": "crawl_date 2015-03-28 to 2019-08-21",
+      "selectivity": 0.4999686666666667,
+      "docs_allowed": 1499906,
+      "postings_decoded_mean": 467414.5150637312,
+      "mismatched_queries": 0,
+      "p50_ms": 2.916125,
+      "p99_ms": 11.542,
+      "mean_ms": 3.4955608592120506
+    }
+  ]
+}

@@ -555,10 +555,29 @@ impl KeywordIndex {
                 first_essential += 1;
             }
             let (lower, essential) = cursors.split_at_mut(first_essential);
-            let Some(lo) = essential.iter().map(|c| c.doc).min().filter(|&d| d != END) else {
+            let Some(mut lo) = essential.iter().map(|c| c.doc).min().filter(|&d| d != END) else {
                 break;
             };
-            let hi = lo.saturating_add(WINDOW as u32);
+            let mut hi = lo.saturating_add(WINDOW as u32);
+            if let Some(allowed) = allowed {
+                // Start the window at the next doc the filter allows and end it after the last
+                // one: postings outside can never be returned, and allowed docs often come in
+                // runs of ids (crawl dates do), so the cursors skip whole blocks between runs.
+                let Some(next) = allowed.range(lo..).next() else {
+                    break;
+                };
+                if next > lo {
+                    lo = next;
+                    hi = lo.saturating_add(WINDOW as u32);
+                    for c in essential.iter_mut() {
+                        c.advance(lo, decoded);
+                    }
+                }
+                hi = allowed
+                    .range(lo..hi)
+                    .next_back()
+                    .map_or(hi, |last| last + 1);
+            }
             for c in essential.iter_mut() {
                 while c.doc < hi {
                     let i = (c.doc - lo) as usize;

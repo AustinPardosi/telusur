@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use telusur::{
     bench,
     engine::{self, BuildOptions, Index, Mode, Ranks, Request, Response, Strategy},
-    filter::{Filter, Filters},
+    filter::{Filter, FilterIndex, Filters},
     synth,
     util::Fbin,
     vector::{kernel::Kernel, kmeans},
@@ -751,4 +751,135 @@ fn filters_never_leak() {
     };
     let err = engine::build(&dir.join("numeric.jsonl"), &dir.join("numeric"), &opts).unwrap_err();
     assert!(format!("{err:#}").contains("no numeric filters"), "{err:#}");
+}
+
+/// Doc i of n: a crawl date in block `i * 40 / n`, so dates come in runs along doc id order (as
+/// in FineWeb) on odd days only, leaving gaps; none when i % 17 == 0.
+fn clustered_day(i: usize, n: usize) -> Option<String> {
+    let block = i * 40 / n;
+    (!i.is_multiple_of(17))
+        .then(|| format!("2023-{:02}-{:02}", 1 + block / 14, 1 + 2 * (block % 14)))
+}
+
+#[test]
+fn clustered_date_ranges() {
+    let n = 50_000;
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("clustered-dates");
+    synth::text(&dir.join("plain.jsonl"), n, 0, 7).unwrap();
+    let corpus: String = fs::read_to_string(dir.join("plain.jsonl"))
+        .unwrap()
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut d: Value = serde_json::from_str(line).unwrap();
+            if let Some(day) = clustered_day(i, n) {
+                d["crawl_date"] = json!(format!("{day}T12:00:00Z"));
+            }
+            format!("{d}\n")
+        })
+        .collect();
+    fs::write(dir.join("corpus.jsonl"), corpus).unwrap();
+    let opts = BuildOptions {
+        date_field: Some("crawl_date".into()),
+        ..BuildOptions::default()
+    };
+    engine::build(&dir.join("corpus.jsonl"), &dir.join("index"), &opts).unwrap();
+    let index = Index::open(&dir.join("index")).unwrap();
+    let filter_index = FilterIndex::open(&dir.join("index")).unwrap();
+    let range = |gte: Option<&str>, lte: Option<&str>| -> Filters {
+        [(
+            "crawl_date".to_string(),
+            Filter::Range {
+                gte: gte.map(Into::into),
+                lte: lte.map(Into::into),
+            },
+        )]
+        .into()
+    };
+
+    // Every range, against the docs whose day falls in it: ends on days with docs, on gaps,
+    // outside all days, open, and reversed.
+    let ends = [
+        None,
+        Some("2022-12-31"),
+        Some("2023-01-01"),
+        Some("2023-01-02"),
+        Some("2023-01-27"),
+        Some("2023-02-14"),
+        Some("2023-02-15"),
+        Some("2023-03-23"),
+        Some("2023-03-24"),
+        Some("2023-04-01"),
+    ];
+    for gte in ends {
+        for lte in ends {
+            let got = filter_index.allowed(&range(gte, lte)).unwrap().unwrap();
+            let want: Vec<u32> = (0..n)
+                .filter(|&i| {
+                    clustered_day(i, n).is_some_and(|d| {
+                        gte.is_none_or(|g| d.as_str() >= g) && lte.is_none_or(|l| d.as_str() <= l)
+                    })
+                })
+                .map(|i| i as u32)
+                .collect();
+            assert_eq!(got.iter().collect::<Vec<_>>(), want, "{gte:?}..{lte:?}");
+        }
+    }
+
+    // MaxScore matches exhaustive under filters that are runs of doc ids, and a narrow run
+    // decodes fewer postings than no filter: cursors jump to it instead of scoring their way.
+    let doc = |id: &str| id.trim_start_matches("synth-").parse::<usize>().unwrap();
+    let filters = [
+        range(Some("2023-02-03"), Some("2023-02-03")),
+        range(Some("2023-01-01"), Some("2023-01-05")),
+        range(Some("2023-03-21"), None),
+        range(Some("2023-01-09"), Some("2023-03-09")),
+    ];
+    for q in ["w1 w2 w3", "w0 w5", "w1000 w1001 w42"] {
+        for k in [1, 10, 100] {
+            let unfiltered = keyword(&index, q, k, Strategy::Maxscore);
+            for f in &filters {
+                let run = |strategy| {
+                    let req = Request {
+                        query: q.into(),
+                        mode: Mode::Keyword,
+                        k,
+                        strategy,
+                        filters: f.clone(),
+                        debug: true,
+                        ..Request::default()
+                    };
+                    index.search(&req).unwrap()
+                };
+                let (e, m) = (run(Strategy::Exhaustive), run(Strategy::Maxscore));
+                let allowed = filter_index.allowed(f).unwrap().unwrap();
+                assert!(
+                    e.results
+                        .iter()
+                        .chain(&m.results)
+                        .all(|h| allowed.contains(doc(&h.id) as u32)),
+                    "{q} k={k} {f:?}: leaked"
+                );
+                assert_eq!(e.results.len(), m.results.len(), "{q} k={k} {f:?}");
+                for (a, b) in e.results.iter().zip(&m.results) {
+                    assert!(
+                        (a.score - b.score).abs() <= 1e-5 * a.score,
+                        "{q} k={k} {f:?}: {} vs {}",
+                        a.score,
+                        b.score
+                    );
+                }
+                if allowed.len() < n as u64 / 20 {
+                    let decoded =
+                        |r: &Response| r.stats.as_ref().unwrap().postings_decoded.unwrap();
+                    assert!(
+                        decoded(&m) < decoded(&unfiltered),
+                        "{q} k={k} {f:?}: {} postings decoded, {} with no filter",
+                        decoded(&m),
+                        decoded(&unfiltered)
+                    );
+                }
+            }
+        }
+    }
 }

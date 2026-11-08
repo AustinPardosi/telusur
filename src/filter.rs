@@ -10,7 +10,7 @@
 
 use crate::util::mmap;
 use anyhow::{Context, Result, bail, ensure};
-use fst::{IntoStreamer, Streamer};
+use fst::Streamer;
 use memmap2::Mmap;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use std::{
     fs::{self, File},
     io::BufWriter,
     path::Path,
+    sync::OnceLock,
 };
 
 /// What a request asks of one field.
@@ -174,11 +175,71 @@ struct Field {
     bitmaps: Mmap,
 }
 
+impl Field {
+    /// The bitmap stored at `at` (`offset << 32 | len`). Unchecked: index files are written
+    /// once by `Builder` and never change (docs/adr/0001-indexes-are-immutable.md), and roaring
+    /// stays memory safe on bad input, so skipping its validation only skips work.
+    fn bitmap(&self, at: u64) -> Result<RoaringBitmap> {
+        let bytes = &self.bitmaps[(at >> 32) as usize..][..at as u32 as usize];
+        Ok(RoaringBitmap::deserialize_unchecked_from(bytes)?)
+    }
+}
+
+/// The crawl days of the date field in order, with a segment tree of their bitmaps so a date
+/// range is the union of a few precomputed blocks of days, not of every day in it (a wide
+/// range of FineWeb took milliseconds that way). Node i is the union of nodes 2i and 2i + 1;
+/// the leaves, from `days.len()` on, are single days.
+/// ponytail: built in memory on the first range query and kept, about (log2 days + 1) copies
+/// of the dated docs; store it in the index files if that ever matters.
+struct DayTree {
+    days: Vec<String>,
+    nodes: Vec<RoaringBitmap>,
+}
+
+impl DayTree {
+    fn build(field: &Field) -> Result<Self> {
+        let (mut days, mut leaves) = (Vec::new(), Vec::new());
+        let mut stream = field.values.stream();
+        while let Some((day, at)) = stream.next() {
+            days.push(String::from_utf8(day.to_vec())?);
+            leaves.push(field.bitmap(at)?);
+        }
+        let mut nodes = vec![RoaringBitmap::new(); days.len()];
+        nodes.append(&mut leaves);
+        for i in (1..days.len()).rev() {
+            nodes[i] = &nodes[2 * i] | &nodes[2 * i + 1];
+        }
+        Ok(Self { days, nodes })
+    }
+
+    /// The docs crawled on days `gte..=lte`, either end open (`YYYY-MM-DD`, compared as text,
+    /// which is date order).
+    fn range(&self, gte: Option<&str>, lte: Option<&str>) -> RoaringBitmap {
+        let n = self.days.len();
+        let mut l = n + gte.map_or(0, |g| self.days.partition_point(|d| d.as_str() < g));
+        let mut r = n + lte.map_or(n, |t| self.days.partition_point(|d| d.as_str() <= t));
+        let mut docs = RoaringBitmap::new();
+        while l < r {
+            if l % 2 == 1 {
+                docs |= &self.nodes[l];
+                l += 1;
+            }
+            if r % 2 == 1 {
+                r -= 1;
+                docs |= &self.nodes[r];
+            }
+            (l, r) = (l / 2, r / 2);
+        }
+        docs
+    }
+}
+
 /// The filter fields of an index, opened.
 #[derive(Default)]
 pub struct FilterIndex {
     date: Option<String>,
     fields: HashMap<String, Field>,
+    days: OnceLock<DayTree>,
 }
 
 impl FilterIndex {
@@ -198,6 +259,7 @@ impl FilterIndex {
         Ok(Self {
             date: names.date,
             fields,
+            days: OnceLock::new(),
         })
     }
 
@@ -215,8 +277,7 @@ impl FilterIndex {
         let mut out = Vec::with_capacity(f.values.len());
         let mut stream = f.values.stream();
         while let Some((value, at)) = stream.next() {
-            let bytes = &f.bitmaps[(at >> 32) as usize..][..at as u32 as usize];
-            let docs = RoaringBitmap::deserialize_from(bytes)?.len();
+            let docs = f.bitmap(at)?.len();
             out.push((String::from_utf8_lossy(value).into_owned(), docs));
         }
         Ok(out)
@@ -229,17 +290,12 @@ impl FilterIndex {
             let Some(field) = self.fields.get(name) else {
                 bail!("{name} is not a filter field of this index (declare it when building)");
             };
-            let bitmap = |v: u64| {
-                RoaringBitmap::deserialize_from(
-                    &field.bitmaps[(v >> 32) as usize..][..v as u32 as usize],
-                )
-            };
             let mut docs = RoaringBitmap::new();
             match filter {
                 Filter::Any(values) => {
                     for v in values {
                         if let Some(at) = field.values.get(v) {
-                            docs |= bitmap(at)?;
+                            docs |= field.bitmap(at)?;
                         }
                     }
                 }
@@ -248,19 +304,20 @@ impl FilterIndex {
                         self.date.as_ref() == Some(name),
                         "{name} is not the crawl date field, so it takes a list of values"
                     );
-                    let mut range = field.values.range();
-                    if let Some(from) = gte {
-                        range = range
-                            .ge(utc_day(from).with_context(|| format!("{name} gte {from:?}"))?);
-                    }
-                    if let Some(to) = lte {
-                        range =
-                            range.le(utc_day(to).with_context(|| format!("{name} lte {to:?}"))?);
-                    }
-                    let mut stream = range.into_stream();
-                    while let Some((_, at)) = stream.next() {
-                        docs |= bitmap(at)?;
-                    }
+                    let from = (gte.as_deref())
+                        .map(|d| utc_day(d).with_context(|| format!("{name} gte {d:?}")))
+                        .transpose()?;
+                    let to = (lte.as_deref())
+                        .map(|d| utc_day(d).with_context(|| format!("{name} lte {d:?}")))
+                        .transpose()?;
+                    let tree = match self.days.get() {
+                        Some(tree) => tree,
+                        None => {
+                            let tree = DayTree::build(field)?;
+                            self.days.get_or_init(|| tree)
+                        }
+                    };
+                    docs = tree.range(from, to);
                 }
             }
             allowed = Some(match allowed {
