@@ -40,11 +40,26 @@ async fn get(base: &str, path: &str) -> Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn http_contract() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("server");
-    synth::text(&dir.join("corpus.jsonl"), 500, 0, 7).unwrap();
+    synth::text(&dir.join("plain.jsonl"), 500, 0, 7).unwrap();
+    // Doc i: domain d{i % 5}.com, crawled on day 1 + i % 28 of January 2024.
+    let corpus: String = std::fs::read_to_string(dir.join("plain.jsonl"))
+        .unwrap()
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut d: Value = serde_json::from_str(line).unwrap();
+            d["domain"] = json!(format!("d{}.com", i % 5));
+            d["crawl_date"] = json!(format!("2024-01-{:02}", 1 + i % 28));
+            format!("{d}\n")
+        })
+        .collect();
+    std::fs::write(dir.join("corpus.jsonl"), corpus).unwrap();
     let queries = synth::vectors(&dir.join("base.fbin"), 500, 1, 128, 7).unwrap();
     let opts = BuildOptions {
         vectors: Some(dir.join("base.fbin")),
         d_code: 128,
+        keyword_fields: vec!["domain".into()],
+        date_field: Some("crawl_date".into()),
         ..BuildOptions::default()
     };
     let index = dir.join("index");
@@ -99,6 +114,22 @@ async fn http_contract() {
     let (_, res) = search(&ok, r#"{"query": "w1 w2", "debug": true}"#).await;
     assert!(res["stats"]["postings_decoded"].is_u64());
     assert!(res["stats"]["clusters_probed"].is_u64());
+
+    // Filters as JSON: any of the values, and an inclusive crawl date range.
+    let body = r#"{"query": "w1 w2", "k": 20, "filters":
+        {"domain": ["d0.com", "d1.com"], "crawl_date": {"gte": "2024-01-01", "lte": "2024-01-10"}}}"#;
+    let (status, res) = search(&ok, body).await;
+    assert_eq!(
+        (status, &res["mode_used"]),
+        (200, &json!("hybrid")),
+        "{res}"
+    );
+    let results = res["results"].as_array().unwrap();
+    assert_eq!(results.len(), 20);
+    for r in results {
+        let i: usize = r["id"].as_str().unwrap()[6..].parse().unwrap();
+        assert!(i % 5 < 2 && i % 28 < 10, "doc {i} breaks the filter");
+    }
 
     let (status, res) = search(&ok, r#"{"query": "w1", "mode": "neural"}"#).await;
     assert_eq!((status, &res["mode_used"]), (200, &json!("neural")));

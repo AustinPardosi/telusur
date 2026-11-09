@@ -241,6 +241,21 @@ uv run --with fastembed scripts/embed_server.py --model nomic-ai/nomic-embed-tex
 ./target/release/telusur serve --index indexes/scifact --embedder http://127.0.0.1:8001 &
 curl -s localhost:8080/search -d '{"query":"does vitamin d prevent fractures","mode":"hybrid","k":5,"debug":true}'
 
+# web data with filters: 1M FineWeb docs (the embed takes TBD on a laptop CPU)
+./target/release/telusur ingest fineweb --parquet data/fineweb --out data/fineweb/corpus-1m.jsonl --limit 1000000
+uv run --with fastembed scripts/embed_corpus.py data/fineweb/corpus-1m.jsonl data/fineweb/corpus-1m.fbin \
+    --limit 1000000 --max-tokens 512
+uv run --with fastembed scripts/embed_corpus.py data/nq/queries.jsonl data/fineweb/nq-queries.fbin --queries
+./target/release/telusur index --corpus data/fineweb/corpus-1m.jsonl --vectors data/fineweb/corpus-1m.fbin \
+    --out indexes/fineweb-neural --keyword-fields domain --date-field crawl_date
+# a filter is any of a field's values, or an inclusive crawl date range (either end open)
+./target/release/telusur search --index indexes/fineweb-neural --mode hybrid \
+    --query-vectors data/fineweb/nq-queries.fbin --query-row 0 \
+    --filter domain=DOMAIN_TBD --filter crawl_date=2019-01-01.. "what is non controlling interest on balance sheet"
+./target/release/telusur serve --index indexes/fineweb-neural --embedder http://127.0.0.1:8001 &
+curl -s localhost:8080/search -d '{"query":"what is non controlling interest on balance sheet","mode":"hybrid",
+    "filters":{"domain":["DOMAIN_TBD"],"crawl_date":{"gte":"2019-01-01"}}}'
+
 ```
 
  
@@ -372,6 +387,8 @@ HTTP and JSON add 0.1 to 0.2 ms, and the server's neural search runs at in-proce
  
 
 FineWeb is used at N = 3M docs: the first three of its parquet files. The keyword build is one pass in memory, and probe builds of 1M and 2M docs measured about 2.4 GB of peak memory per million docs. 3M (6.93 GB measured) fits a 16 GB laptop next to everything else; 4M (about 10 GB) would not ([details](bench-results/fineweb-3m-2026-11-07.md)). Past that, the build would need segments and a merge.
+
+Neural and hybrid search on FineWeb use a second index, over the first 1M of those docs. Embedding is the slow part. The 3M keyword build takes 427 s, but embedding 1M docs with nomic-embed-text-v1.5 on this laptop's CPU takes TBD. And an index never changes once built, so every doc in it has a vector or none do ([ADR 0001](docs/adr/0001-indexes-are-immutable.md)). So the embedded docs get their own full index (keyword, vectors and filters) instead of vectors on a third of the 3M one.
 
 FineWeb is released under ODC-By 1.0 and is subject to Common Crawl's terms of use.
 
