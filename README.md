@@ -213,6 +213,20 @@ Keyword search with real web filters, on FineWeb 3M with NQ's queries ([B5](benc
 
 Filtered MaxScore returns the same top 10 as filtered exhaustive search on every query. Narrow date ranges beat no filter: FineWeb's crawl dates come in runs along doc id order, and each MaxScore window starts at the next doc the filter allows, so cursors skip whole runs. A date range is the union of a few precomputed blocks of days, so even 50% costs little to build. Before that change, 20 days of crawl took 2.96x and 4.4 years 2.42x. This run was on battery, which is why "none" is slower than in the BM25 table above.
 
+Neural and hybrid search with the same kind of filters, on the FineWeb 1M index with NQ's queries ([B5](bench-results/b5-hybrid-filters-fineweb-2026-11-10.md)). Hybrid recall is against an exact hybrid: RRF over the exact keyword and neural top 100s with the same filter.
+
+| Filter                 | Selectivity | Neural p50 ms | Recall@10 | Hybrid p50 ms | Recall@10 |
+| ---------------------- | ----------- | ------------- | --------- | ------------- | --------- |
+| none                   | 100%        | 0.53          | 0.822     | 2.09          | 0.789     |
+| the biggest domain     | 0.11%       | 0.12          | 1.000     | 2.05          | 1.000     |
+| the 20 biggest domains | 1.02%       | 1.29          | 0.999     | 2.40          | 1.000     |
+| one day of crawl       | 0.10%       | 0.10          | 1.000     | 1.67          | 1.000     |
+| two days of crawl      | 1.00%       | 0.99          | 1.000     | 2.16          | 1.000     |
+| a year of crawl        | 10.0%       | 2.53          | 0.867     | 2.64          | 0.809     |
+| six years of crawl     | 50.0%       | 1.03          | 0.831     | 2.13          | 0.792     |
+
+No result left its filter. Hybrid stays within 1.26x of unfiltered for every filter, so it meets the 2x target at 1%. Neural meets it for crawl dates (1.87x) but not for domains (2.45x), the same miss as on DBpedia. Unfiltered neural recall is lower than DBpedia's 0.952 at the same settings, and I have not found out why yet.
+
 
  
 
@@ -241,7 +255,7 @@ uv run --with fastembed scripts/embed_server.py --model nomic-ai/nomic-embed-tex
 ./target/release/telusur serve --index indexes/scifact --embedder http://127.0.0.1:8001 &
 curl -s localhost:8080/search -d '{"query":"does vitamin d prevent fractures","mode":"hybrid","k":5,"debug":true}'
 
-# web data with filters: 1M FineWeb docs (the embed takes TBD on a laptop CPU)
+# web data with filters: 1M FineWeb docs (the embed took 58 hours on a laptop CPU)
 ./target/release/telusur ingest fineweb --parquet data/fineweb --out data/fineweb/corpus-1m.jsonl --limit 1000000
 uv run --with fastembed scripts/embed_corpus.py data/fineweb/corpus-1m.jsonl data/fineweb/corpus-1m.fbin \
     --limit 1000000 --max-tokens 512
@@ -251,10 +265,12 @@ uv run --with fastembed scripts/embed_corpus.py data/nq/queries.jsonl data/finew
 # a filter is any of a field's values, or an inclusive crawl date range (either end open)
 ./target/release/telusur search --index indexes/fineweb-neural --mode hybrid \
     --query-vectors data/fineweb/nq-queries.fbin --query-row 0 \
-    --filter domain=DOMAIN_TBD --filter crawl_date=2019-01-01.. "what is non controlling interest on balance sheet"
-./target/release/telusur serve --index indexes/fineweb-neural --embedder http://127.0.0.1:8001 &
-curl -s localhost:8080/search -d '{"query":"what is non controlling interest on balance sheet","mode":"hybrid",
-    "filters":{"domain":["DOMAIN_TBD"],"crawl_date":{"gte":"2019-01-01"}}}'
+    --filter domain=investopedia.com,accountingtools.com --filter crawl_date=2019-01-01.. \
+    "what is non controlling interest on balance sheet"
+./target/release/telusur serve --index indexes/fineweb-neural --embedder http://127.0.0.1:8001 \
+    --addr 127.0.0.1:8081 &
+curl -s localhost:8081/search -d '{"query":"what is non controlling interest on balance sheet","mode":"hybrid",
+    "filters":{"domain":["investopedia.com","accountingtools.com"],"crawl_date":{"gte":"2019-01-01"}}}'
 
 ```
 
@@ -276,6 +292,7 @@ Rules I hold myself to: release build, warm cache, single-thread latency over 1,
 | ANN recall vs latency       | `telusur bench ann --index indexes/dbpedia --queries ... --gt ...` |
 | ANN vs FAISS and hnswlib    | `scripts/compare_faiss.py data/dbpedia`                            |
 | Filters                     | `telusur bench filters ...`                                        |
+| Filters on web data         | `telusur bench keyword-filters ...` and `bench hybrid-filters ...` |
 | BM25 quality                | `telusur eval beir --data data/<set> --index indexes/<set>`        |
 | Keyword, neural, hybrid quality | `telusur eval beir ... --query-vectors data/<set>/queries.fbin` |
 | HTTP latency per stage      | `telusur bench http --queries ...` against `telusur serve`         |
@@ -388,7 +405,7 @@ HTTP and JSON add 0.1 to 0.2 ms, and the server's neural search runs at in-proce
 
 FineWeb is used at N = 3M docs: the first three of its parquet files. The keyword build is one pass in memory, and probe builds of 1M and 2M docs measured about 2.4 GB of peak memory per million docs. 3M (6.93 GB measured) fits a 16 GB laptop next to everything else; 4M (about 10 GB) would not ([details](bench-results/fineweb-3m-2026-11-07.md)). Past that, the build would need segments and a merge.
 
-Neural and hybrid search on FineWeb use a second index, over the first 1M of those docs. Embedding is the slow part. The 3M keyword build takes 427 s, but embedding 1M docs with nomic-embed-text-v1.5 on this laptop's CPU takes TBD. And an index never changes once built, so every doc in it has a vector or none do ([ADR 0001](docs/adr/0001-indexes-are-immutable.md)). So the embedded docs get their own full index (keyword, vectors and filters) instead of vectors on a third of the 3M one.
+Neural and hybrid search on FineWeb use a second index, over the first 1M of those docs. Embedding is the slow part. The 3M keyword build takes 427 s, but embedding 1M docs with nomic-embed-text-v1.5 on this laptop's CPU took 58 hours, about 2 hours per 50k docs plus a night asleep ([log](bench-results/fineweb-neural-build-2026-11-10.txt)). And an index never changes once built, so every doc in it has a vector or none do ([ADR 0001](docs/adr/0001-indexes-are-immutable.md)). So the embedded docs get their own full index (keyword, vectors and filters) instead of vectors on a third of the 3M one.
 
 FineWeb is released under ODC-By 1.0 and is subject to Common Crawl's terms of use.
 
