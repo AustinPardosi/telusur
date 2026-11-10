@@ -1,0 +1,16 @@
+# cargo bench --bench kernels -- rerank --warm-up-time 1 --measurement-time 3
+# time per 10,000 dot_f16 calls; machine: Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power
+## before (dot_f16 through half's slice conversion, then the 16-lane f32 dot), 11:56
+rerank-768/hot time: [1.0015 ms 1.0074 ms 1.0131 ms]
+rerank-768/random time: [1.1931 ms 1.2198 ms 1.2544 ms]
+rerank-1024/hot time: [1.2821 ms 1.2871 ms 1.2924 ms]
+rerank-1024/random time: [1.7463 ms 1.7665 ms 1.7912 ms]
+## after (NEON kernel: fcvtl, 8 FMA registers; scalar = the reference it must equal)
+rerank-768/best-hot time: [272.10 µs 272.46 µs 272.93 µs]
+rerank-768/best-random time: [513.71 µs 517.83 µs 522.66 µs]
+rerank-768/scalar-hot time: [1.0490 ms 1.0496 ms 1.0503 ms]
+rerank-768/scalar-random time: [1.4782 ms 1.4957 ms 1.5164 ms]
+rerank-1024/best-hot time: [369.46 µs 369.94 µs 370.61 µs]
+rerank-1024/best-random time: [947.81 µs 961.04 µs 977.35 µs]
+rerank-1024/scalar-hot time: [1.4014 ms 1.4039 ms 1.4066 ms]
+rerank-1024/scalar-random time: [2.0296 ms 2.0487 ms 2.0711 ms]

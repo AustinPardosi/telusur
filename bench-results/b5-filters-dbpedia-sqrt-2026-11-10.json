@@ -1,0 +1,57 @@
+{
+  "bench": "filters",
+  "index": "indexes/dbpedia",
+  "field": "category",
+  "queries": 1000,
+  "nprobe": 256,
+  "rerank_depth": 500,
+  "kernel": "neon",
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+  "runs": [
+    {
+      "selectivity": 1.0,
+      "docs_allowed": 999000,
+      "path": "clusters",
+      "clusters_probed_mean": 256.0,
+      "recall_at_10": 0.9517,
+      "p50_ms": 0.45287499999999997,
+      "p99_ms": 0.60875
+    },
+    {
+      "selectivity": 0.000995995995995996,
+      "docs_allowed": 995,
+      "path": "exact",
+      "clusters_probed_mean": 0.0,
+      "recall_at_10": 1.0,
+      "p50_ms": 0.05425,
+      "p99_ms": 0.058167
+    },
+    {
+      "selectivity": 0.009943943943943944,
+      "docs_allowed": 9934,
+      "path": "exact",
+      "clusters_probed_mean": 0.0,
+      "recall_at_10": 0.9999,
+      "p50_ms": 0.6979580000000001,
+      "p99_ms": 1.161875
+    },
+    {
+      "selectivity": 0.10020620620620621,
+      "docs_allowed": 100106,
+      "path": "clusters",
+      "clusters_probed_mean": 809.0,
+      "recall_at_10": 0.9602,
+      "p50_ms": 1.221291,
+      "p99_ms": 1.5154999999999998
+    },
+    {
+      "selectivity": 0.4993933933933934,
+      "docs_allowed": 498894,
+      "path": "clusters",
+      "clusters_probed_mean": 363.0,
+      "recall_at_10": 0.9566,
+      "p50_ms": 1.279583,
+      "p99_ms": 1.6270419999999999
+    }
+  ]
+}

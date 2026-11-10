@@ -8,9 +8,9 @@
 //! `rerank.f16` (d_rerank f16 per doc, in doc id order).
 
 use super::{
-    kernel::{BLOCK, Kernel, QueryLut, pack_blocks, scan},
+    kernel::{BLOCK, Kernel, QueryLut, dot_f16, pack_blocks, prefetch, scan},
     kmeans,
-    quant::{binarize, dot, dot_f16, truncate_normalize},
+    quant::{binarize, dot, truncate_normalize},
 };
 use crate::util::{Fbin, MmapSlice, TopK, mmap};
 use anyhow::{Result, ensure};
@@ -33,6 +33,10 @@ const PADDING: u32 = u32::MAX;
 pub const DEFAULT_NPROBE: usize = 256;
 /// A filter allowing at most this many docs skips the clusters and scores them all exactly.
 pub const EXACT_FILTER_MAX: u64 = 20_000;
+/// Rerank rows are prefetched this many docs ahead of the one being scored. On DBpedia's 1%
+/// filter (B5, #24), 1 and 2 were fastest and 3, 4, 8 and 16 slower; 2 also gave the fastest
+/// unfiltered search.
+const PREFETCH_AHEAD: usize = 2;
 /// k-means trains on this many sample points per cluster, for this many rounds.
 const SAMPLE_PER_CLUSTER: usize = 64;
 const ITERS: usize = 12;
@@ -189,8 +193,10 @@ impl VectorIndex {
     ///
     /// With `allowed` (a filter's docs), only those docs can be returned. If there are at most
     /// `EXACT_FILTER_MAX`, they are all scored exactly with rerank vectors and nothing is
-    /// probed. Otherwise the probe widens to `nprobe / selectivity` clusters (at most all of
-    /// them) and disallowed docs are dropped before the candidate heap.
+    /// probed. Otherwise the probe widens to `nprobe / sqrt(selectivity)` clusters (at most all
+    /// of them) and disallowed docs are dropped before the candidate heap. Widening by
+    /// `1 / selectivity` probed every cluster at 10% for recall nobody asked for; the square
+    /// root kept filtered recall above unfiltered on DBpedia and FineWeb (B5, #25).
     pub fn search(
         &self,
         query: &[f32],
@@ -221,7 +227,11 @@ impl VectorIndex {
             let t = Instant::now();
             let q = truncate_normalize(query, d_rerank);
             let mut top = TopK::new(k);
+            let mut ahead = allowed.iter().skip(PREFETCH_AHEAD);
             for doc in allowed {
+                if let Some(a) = ahead.next() {
+                    prefetch(rerank_row(a));
+                }
                 top.push(doc, dot_f16(rerank_row(doc), &q));
             }
             let trace = Trace {
@@ -236,7 +246,7 @@ impl VectorIndex {
         let nprobe = match allowed {
             Some(a) => {
                 let docs = (rerank.len() / d_rerank) as f64;
-                (nprobe as f64 * docs / a.len() as f64).ceil() as usize
+                (nprobe as f64 * (docs / a.len() as f64).sqrt()).ceil() as usize
             }
             None => nprobe,
         };
@@ -291,7 +301,11 @@ impl VectorIndex {
         } else {
             let q = truncate_normalize(query, d_rerank);
             let mut top = TopK::new(k);
-            for (doc, _) in candidates.into_sorted() {
+            let docs = candidates.into_sorted();
+            for (i, &(doc, _)) in docs.iter().enumerate() {
+                if let Some(&(a, _)) = docs.get(i + PREFETCH_AHEAD) {
+                    prefetch(rerank_row(a));
+                }
                 top.push(doc, dot_f16(rerank_row(doc), &q));
             }
             top.into_sorted()

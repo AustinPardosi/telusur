@@ -42,8 +42,8 @@ All numbers below come from the commands in [Benchmarks](#benchmarks), on the ma
 | -------------------------------------------------------- | ------------------------------------- |
 | Codes scored per second, one core (256-dim, best kernel) | 516M (NEON, Apple M4)                 |
 | Speedup over scalar                                      | 11x (NEON, Apple M4)                  |
-| Recall@10 on 1M OpenAI embeddings                        | 0.952 at 0.58 ms p50 (0.835 vs full)  |
-| vs hnswlib HNSW at recall@10 ≥ 0.95                      | 1.5x faster p50, half the bytes       |
+| Recall@10 on 1M OpenAI embeddings                        | 0.952 at 0.45 ms p50 (0.835 vs full)  |
+| vs hnswlib HNSW at recall@10 ≥ 0.95                      | 1.8x faster p50, half the bytes       |
 | Hot memory per vector                                    | 37.2 bytes (vs 12,288 for raw float32) |
 | BM25 nDCG@10 vs Anserini (avg of 4 BEIR sets)            | 45.72 vs 45.79                        |
 | Hybrid nDCG@10 (avg of 4 BEIR sets)                      | 56.60 (neural 56.14, BM25 45.72)      |
@@ -191,13 +191,16 @@ Filters (domain, crawl date range, any keyword field) are roaring bitmaps. If a 
 
 | Selectivity | p50 ms | Recall@10 | Path |
 | ----------- | ------ | --------- | ---- |
-| none        | 0.59   | 0.952     | 256 clusters |
-| 0.1%        | 0.14   | 1.000     | exact |
-| 1%          | 2.20   | 1.000     | exact |
-| 10%         | 4.09   | 0.963     | 2,048 clusters |
-| 50%         | 3.51   | 0.961     | 513 clusters |
+| none        | 0.45   | 0.952     | 256 clusters |
+| 0.1%        | 0.05   | 1.000     | exact |
+| 1%          | 0.70   | 1.000     | exact |
+| 10%         | 1.22   | 0.960     | 809 clusters |
+| 50%         | 1.28   | 0.957     | 363 clusters |
 
-DBpedia 1M with synthetic categories, neural search at the defaults, Apple M4 ([B5](bench-results/b5-filters-dbpedia-2026-11-05.md)). Recall is against the exact top 10 among the allowed docs. At 1% the exact path takes 3.7x the unfiltered latency, so it misses the 2x target; 10% and 50% probe nearly every cluster.
+DBpedia 1M with synthetic categories, neural search at the defaults, Apple M4 ([B5](bench-results/broad-filters-2026-11-10.md)). Recall is against the exact top 10 among the allowed docs.
+
+- **1% takes 1.54x the unfiltered latency, within the 2x target.** It took 3.7x until the rerank dot product got its own NEON kernel and a prefetch ([#24](bench-results/rerank-speedup-2026-11-10.md)); the old one ran under 2 dims per cycle.
+- **10% and 50% take 2.7x to 2.8x.** They took 6.6x to 7.8x before two fixes ([#25](bench-results/broad-filters-2026-11-10.md)). A filter on many values now builds its bitmap with one multi-way union instead of 500 one-by-one merges. And a broad filter probes `256 / sqrt(selectivity)` clusters instead of `256 / selectivity`, which probed every cluster at 10%. Filtered recall stays above unfiltered recall.
 
 Keyword search with real web filters, on FineWeb 3M with NQ's queries ([B5](bench-results/fineweb-3m-2026-11-07.md)):
 
@@ -213,19 +216,19 @@ Keyword search with real web filters, on FineWeb 3M with NQ's queries ([B5](benc
 
 Filtered MaxScore returns the same top 10 as filtered exhaustive search on every query. Narrow date ranges beat no filter: FineWeb's crawl dates come in runs along doc id order, and each MaxScore window starts at the next doc the filter allows, so cursors skip whole runs. A date range is the union of a few precomputed blocks of days, so even 50% costs little to build. Before that change, 20 days of crawl took 2.96x and 4.4 years 2.42x. This run was on battery, which is why "none" is slower than in the BM25 table above.
 
-Neural and hybrid search with the same kind of filters, on the FineWeb 1M index with NQ's queries ([B5](bench-results/b5-hybrid-filters-fineweb-2026-11-10.md)). Hybrid recall is against an exact hybrid: RRF over the exact keyword and neural top 100s with the same filter.
+Neural and hybrid search with the same kind of filters, on the FineWeb 1M index with NQ's queries ([B5](bench-results/broad-filters-2026-11-10.md)). Hybrid recall is against an exact hybrid: RRF over the exact keyword and neural top 100s with the same filter.
 
 | Filter                 | Selectivity | Neural p50 ms | Recall@10 | Hybrid p50 ms | Recall@10 |
 | ---------------------- | ----------- | ------------- | --------- | ------------- | --------- |
-| none                   | 100%        | 0.53          | 0.822     | 2.09          | 0.789     |
-| the biggest domain     | 0.11%       | 0.12          | 1.000     | 2.05          | 1.000     |
-| the 20 biggest domains | 1.02%       | 1.29          | 0.999     | 2.40          | 1.000     |
-| one day of crawl       | 0.10%       | 0.10          | 1.000     | 1.67          | 1.000     |
-| two days of crawl      | 1.00%       | 0.99          | 1.000     | 2.16          | 1.000     |
-| a year of crawl        | 10.0%       | 2.53          | 0.867     | 2.64          | 0.809     |
-| six years of crawl     | 50.0%       | 1.03          | 0.831     | 2.13          | 0.792     |
+| none                   | 100%        | 0.62          | 0.940     | 2.16          | 0.896     |
+| the biggest domain     | 0.11%       | 0.05          | 1.000     | 2.14          | 1.000     |
+| the 20 biggest domains | 1.02%       | 0.47          | 0.999     | 2.30          | 1.000     |
+| one day of crawl       | 0.10%       | 0.04          | 1.000     | 1.74          | 1.000     |
+| two days of crawl      | 1.00%       | 0.41          | 1.000     | 2.19          | 1.000     |
+| a year of crawl        | 10.0%       | 1.90          | 0.971     | 2.07          | 0.915     |
+| six years of crawl     | 50.0%       | 1.05          | 0.951     | 2.17          | 0.902     |
 
-No result left its filter. Hybrid stays within 1.26x of unfiltered for every filter, so it meets the 2x target at 1%. Neural meets it for crawl dates (1.87x) but not for domains (2.45x), the same miss as on DBpedia. Unfiltered neural recall is lower than DBpedia's 0.952 at the same settings, and I have not found out why yet.
+No result left its filter. At 1% both modes are within the 2x target: neural takes 0.65x to 0.75x of unfiltered, hybrid 1.01x to 1.06x. Most of hybrid's time is the keyword stage, which a filter barely changes. This index uses 512-dim codes; with 256 its unfiltered neural recall was 0.822 (see [ANN](#ann-on-1m-openai-embeddings)).
 
 
  
@@ -261,7 +264,7 @@ uv run --with fastembed scripts/embed_corpus.py data/fineweb/corpus-1m.jsonl dat
     --limit 1000000 --max-tokens 512
 uv run --with fastembed scripts/embed_corpus.py data/nq/queries.jsonl data/fineweb/nq-queries.fbin --queries
 ./target/release/telusur index --corpus data/fineweb/corpus-1m.jsonl --vectors data/fineweb/corpus-1m.fbin \
-    --out indexes/fineweb-neural --keyword-fields domain --date-field crawl_date
+    --out indexes/fineweb-neural --keyword-fields domain --date-field crawl_date --d-code 512
 # a filter is any of a field's values, or an inclusive crawl date range (either end open)
 ./target/release/telusur search --index indexes/fineweb-neural --mode hybrid \
     --query-vectors data/fineweb/nq-queries.fbin --query-row 0 \
@@ -347,30 +350,32 @@ On the small sets the gap is mostly per-query overhead: even telusur's exhaustiv
  
 
 
-DBpedia 1M, OpenAI text-embedding-3-large (3072 dims), 2,048 clusters, 256-dim codes, 1024-dim rerank vectors, Apple M4 ([B3](bench-results/b3-ann-dbpedia-2026-11-05.md), full grid there). Recall@10 against rerank ground truth (exact top 10 at the rerank dims) and full ground truth (at all 3072 dims); latency on one thread.
+DBpedia 1M, OpenAI text-embedding-3-large (3072 dims), 2,048 clusters, 256-dim codes, 1024-dim rerank vectors, Apple M4 ([B3](bench-results/b3-ann-dbpedia-2026-11-05.md), full grid there; rerun on 10 Nov after [#24](bench-results/rerank-speedup-2026-11-10.md)). Recall@10 against rerank ground truth (exact top 10 at the rerank dims) and full ground truth (at all 3072 dims); latency on one thread.
 
 | Clusters probed | Rerank depth | Recall@10 (rerank / full GT) | p50 ms | p99 ms | QPS (4 / 10 threads) |
 | --------------- | ------------ | ---------------------------- | ------ | ------ | -------------------- |
-| 32              | 0            | 0.457 / 0.441                | 0.08   | 0.09   | 42,910 / 65,843      |
-| 32              | 200          | 0.839 / 0.754                | 0.17   | 0.18   | 18,228 / 31,792      |
-| 128             | 200          | 0.894 / 0.800                | 0.28   | 0.33   | 11,452 / 17,794      |
-| 128             | 500          | 0.932 / 0.821                | 0.40   | 0.44   | 7,761 / 11,863       |
-| 256 (default)   | 500          | 0.952 / 0.835                | 0.58   | 0.69   | 5,674 / 8,809        |
-| 512             | 1000         | 0.976 / 0.849                | 1.10   | 1.48   | 2,939 / 3,521        |
+| 32              | 0            | 0.457 / 0.441                | 0.07   | 0.08   | 47,337 / 75,497      |
+| 32              | 200          | 0.839 / 0.754                | 0.12   | 0.14   | 29,746 / 44,267      |
+| 128             | 200          | 0.894 / 0.800                | 0.23   | 0.27   | 15,186 / 23,535      |
+| 128             | 500          | 0.932 / 0.821                | 0.31   | 0.34   | 11,644 / 18,475      |
+| 256 (default)   | 500          | 0.952 / 0.835                | 0.45   | 0.49   | 7,633 / 12,005       |
+| 512             | 1000         | 0.976 / 0.849                | 0.84   | 0.99   | 4,062 / 6,450        |
 
 The defaults, 256 clusters probed and a rerank depth of 500, are the smallest that reach 0.95 against rerank ground truth; at depth 200 recall stops near 0.92 however many clusters are probed. Against full ground truth recall tops out near 0.85: that is the cost of reranking with 1024 of the 3072 dims. QPS at 10 threads is noisy on a laptop with other apps open.
+
+The right code size depends on the embedding model. On FineWeb 1M with nomic-embed-text-v1.5 (768 dims) and NQ questions as queries, 256-dim codes reach only 0.822 at the defaults. Probing every cluster barely helps (0.828), and the 256-dim codes find 28% of the true top 100 against 42.5% on DBpedia. So the first stage is what loses recall. 512-dim codes reach 0.940 at the defaults and win at every latency, for 74 instead of 39 hot bytes per vector, so the FineWeb index uses them ([details](bench-results/fineweb-recall-2026-11-10.md)).
 
 
  
 
-Against FAISS and hnswlib on the same machine, each at the cheapest setting that reaches recall@10 ≥ 0.95, given the same 1024-dim vectors ([B4](bench-results/b4-ann-vs-others-2026-11-07.md)):
+Against FAISS and hnswlib on the same machine, each at the cheapest setting that reaches recall@10 ≥ 0.95, given the same 1024-dim vectors, all in one session ([B4](bench-results/b4-ann-vs-others-2026-11-10.md)):
 
 | Engine                            | Recall@10 | p50 ms | QPS, 10 threads | Index bytes         |
 | --------------------------------- | --------- | ------ | --------------- | ------------------- |
-| telusur                           | 0.952     | 0.54   | 10,078          | 2.09 GB (39 MB hot) |
-| hnswlib HNSW (M 16, ef 64)        | 0.956     | 0.81   | 7,472           | 4.24 GB             |
-| FAISS IndexIVFFlat (128 lists)    | 0.972     | 4.34   | 421             | 4.11 GB             |
-| FAISS IndexBinaryIVF + rerank 500 | 0.868 max | 0.63   |                 | 4.13 GB             |
+| telusur                           | 0.952     | 0.44   | 12,491          | 2.09 GB (39 MB hot) |
+| hnswlib HNSW (M 16, ef 64)        | 0.959     | 0.82   | 6,733           | 4.24 GB             |
+| FAISS IndexIVFFlat (128 lists)    | 0.972     | 4.29   | 352             | 4.11 GB             |
+| FAISS IndexBinaryIVF + rerank 500 | 0.868 max | 0.62   |                 | 4.13 GB             |
 
 Only telusur's codes, ids and centroids (39 MB) need to stay in RAM; the f16 rerank vectors are memory-mapped and read for 500 candidates per query. The FAISS binary row is telusur's design with Hamming distance in place of the float-query scan. It never reaches 0.95, even probing 512 clusters. hnswlib has hand-written SIMD only for x86, so this ARM run probably understates it.
 

@@ -9,8 +9,11 @@
 //! the shape a 16-way byte shuffle wants. `pshufb` / `vpshufb` (x86) and `tbl` (ARM) are
 //! 16-entry table lookups, so with a table in one register and 32 docs' nibbles in another,
 //! one instruction does 32 lookups. Every SIMD kernel must equal `scan_scalar` bit for bit.
+//!
+//! Also the rerank dot product, `dot_f16`, whose SIMD versions must equal `dot_f16_scalar`.
 
 use anyhow::{Result, bail};
+use half::f16;
 use serde::Serialize;
 use std::sync::OnceLock;
 
@@ -98,6 +101,82 @@ pub fn scan(kernel: Kernel, lut: &QueryLut, blocks: &[u8], out: &mut [u16]) -> R
     Ok(())
 }
 
+/// The exact dot product of an f16 rerank row and an f32 query. NEON on ARM, AVX2 with F16C
+/// and FMA on x86 when the CPU has them, else `dot_f16_scalar`; they all give the same bits.
+/// The SIMD versions convert 8 halves per instruction and keep 32 lanes of fused multiply-adds
+/// in independent registers, so no add waits on the one before it.
+pub fn dot_f16(a: &[f16], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "row and query dims");
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        // SAFETY: NEON was just detected.
+        return unsafe { arm::dot_f16_neon(a, b) };
+    }
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2")
+        && is_x86_feature_detected!("fma")
+        && is_x86_feature_detected!("f16c")
+    {
+        // SAFETY: AVX2, FMA and F16C were just detected.
+        return unsafe { x86::dot_f16_avx2(a, b) };
+    }
+    dot_f16_scalar(a, b)
+}
+
+/// The reference for `dot_f16`: lane i of 32 takes dims 32k + i with fused multiply-adds;
+/// then halving sums (lane i += lane i + 16, then + 8, + 4, + 2, + 1); then the dims after the
+/// last full 32, in order.
+pub fn dot_f16_scalar(a: &[f16], b: &[f32]) -> f32 {
+    let ((a32, a_rest), (b32, b_rest)) = (a.as_chunks::<32>(), b.as_chunks::<32>());
+    let mut lanes = [0f32; 32];
+    for (x, y) in a32.iter().zip(b32) {
+        for i in 0..32 {
+            lanes[i] = x[i].to_f32().mul_add(y[i], lanes[i]);
+        }
+    }
+    for width in [16, 8, 4, 2, 1] {
+        for i in 0..width {
+            lanes[i] += lanes[i + width];
+        }
+    }
+    add_rest(lanes[0], a_rest, b_rest)
+}
+
+/// Asks the CPU to start loading `row` into cache, one hint per 64-byte line, so a
+/// `dot_f16` on it a few rows later waits less for memory. A hint only: it cannot fault and
+/// changes no result.
+#[inline(always)]
+pub fn prefetch(row: &[f16]) {
+    for line in row.chunks(32) {
+        #[cfg(target_arch = "aarch64")]
+        // SAFETY: `prfm` is a hint that loads nothing architecturally and cannot fault.
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl1keep, [{p}]",
+                p = in(reg) line.as_ptr(),
+                options(nostack, preserves_flags, readonly),
+            )
+        };
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: a prefetch is a hint that loads nothing architecturally and cannot fault.
+        unsafe {
+            std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(
+                line.as_ptr().cast(),
+            )
+        };
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        let _ = line;
+    }
+}
+
+/// The dims after the last full 32, added to `sum` in order; shared by every version.
+fn add_rest(sum: f32, a_rest: &[f16], b_rest: &[f32]) -> f32 {
+    a_rest
+        .iter()
+        .zip(b_rest)
+        .fold(sum, |s, (x, y)| x.to_f32().mul_add(*y, s))
+}
+
 pub struct QueryLut {
     /// One table per group of 4 query dims: entry n is the partial dot product with the
     /// sign pattern n (bit k set = dim 4g + k is +1), shifted to start at 0 and scaled.
@@ -175,8 +254,37 @@ pub fn scan_scalar(lut: &QueryLut, blocks: &[u8], out: &mut [u16]) {
 
 #[cfg(target_arch = "x86_64")]
 mod x86 {
-    use super::{BLOCK, QueryLut};
+    use super::{BLOCK, QueryLut, add_rest};
+    use half::f16;
     use std::arch::x86_64::*;
+
+    /// Register m holds lanes 8m..8m+8 of `dot_f16_scalar`. The first two halving steps add
+    /// whole registers, the next adds the 128-bit halves, the last two are in-register.
+    #[target_feature(enable = "avx2,fma,f16c")]
+    pub(super) fn dot_f16_avx2(a: &[f16], b: &[f32]) -> f32 {
+        let ((a32, a_rest), (b32, b_rest)) = (a.as_chunks::<32>(), b.as_chunks::<32>());
+        let mut acc = [_mm256_setzero_ps(); 4];
+        for (x, y) in a32.iter().zip(b32) {
+            for (m, acc) in acc.iter_mut().enumerate() {
+                // SAFETY: `x` is 32 halves and `y` 32 floats; each load reads 8 of them at 8m.
+                let (h, q) = unsafe {
+                    (
+                        _mm_loadu_si128(x.as_ptr().add(8 * m).cast()),
+                        _mm256_loadu_ps(y.as_ptr().add(8 * m)),
+                    )
+                };
+                *acc = _mm256_fmadd_ps(_mm256_cvtph_ps(h), q, *acc);
+            }
+        }
+        let v = _mm256_add_ps(_mm256_add_ps(acc[0], acc[2]), _mm256_add_ps(acc[1], acc[3]));
+        let v = _mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
+        let v = _mm_add_ps(v, _mm_movehl_ps(v, v));
+        add_rest(
+            _mm_cvtss_f32(_mm_add_ss(v, _mm_shuffle_ps(v, v, 1))),
+            a_rest,
+            b_rest,
+        )
+    }
 
     /// Writes 32 docs' u16 sums: `even` holds docs 0, 2, .., 30 and `odd` docs 1, 3, .., 31,
     /// as 16 u16 lanes each.
@@ -303,8 +411,56 @@ mod x86 {
 
 #[cfg(target_arch = "aarch64")]
 mod arm {
-    use super::{BLOCK, QueryLut};
-    use std::arch::aarch64::*;
+    use super::{BLOCK, QueryLut, add_rest};
+    use half::f16;
+    use std::arch::{aarch64::*, asm};
+
+    /// Register m holds lanes 4m..4m+4 of `dot_f16_scalar`. `fcvtl` / `fcvtl2` convert the low
+    /// and high 4 halves of a register; Rust has no stable intrinsic for them yet.
+    #[target_feature(enable = "neon")]
+    pub(super) fn dot_f16_neon(a: &[f16], b: &[f32]) -> f32 {
+        let ((a32, a_rest), (b32, b_rest)) = (a.as_chunks::<32>(), b.as_chunks::<32>());
+        let mut acc = [vdupq_n_f32(0.0); 8];
+        for (x, y) in a32.iter().zip(b32) {
+            for j in 0..4 {
+                // SAFETY: `x` is 32 halves and `y` 32 floats; these read 8 of each at 8j.
+                let (h, q0, q1) = unsafe {
+                    (
+                        vld1q_u16(x.as_ptr().add(8 * j).cast()),
+                        vld1q_f32(y.as_ptr().add(8 * j)),
+                        vld1q_f32(y.as_ptr().add(8 * j + 4)),
+                    )
+                };
+                let (lo, hi): (float32x4_t, float32x4_t);
+                // SAFETY: register-only conversions; no memory, stack or flags touched.
+                unsafe {
+                    asm!(
+                        "fcvtl {lo:v}.4s, {h:v}.4h",
+                        "fcvtl2 {hi:v}.4s, {h:v}.8h",
+                        lo = out(vreg) lo,
+                        hi = out(vreg) hi,
+                        h = in(vreg) h,
+                        options(pure, nomem, nostack, preserves_flags),
+                    )
+                };
+                acc[2 * j] = vfmaq_f32(acc[2 * j], lo, q0);
+                acc[2 * j + 1] = vfmaq_f32(acc[2 * j + 1], hi, q1);
+            }
+        }
+        for m in 0..4 {
+            acc[m] = vaddq_f32(acc[m], acc[m + 4]);
+        }
+        for m in 0..2 {
+            acc[m] = vaddq_f32(acc[m], acc[m + 2]);
+        }
+        let v = vaddq_f32(acc[0], acc[1]);
+        let v = vadd_f32(vget_low_f32(v), vget_high_f32(v));
+        add_rest(
+            vget_lane_f32::<0>(v) + vget_lane_f32::<1>(v),
+            a_rest,
+            b_rest,
+        )
+    }
 
     /// A row is 32 bytes, two 16-byte registers. `vqtbl1q_u8` is the 16-entry lookup;
     /// `vaddl_u8` / `vaddl_high_u8` add the two lookups while widening to u16, which keeps

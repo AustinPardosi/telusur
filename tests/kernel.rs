@@ -1,6 +1,7 @@
+use half::f16;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use telusur::vector::{
-    kernel::{Kernel, QueryLut, pack_blocks, scan, scan_scalar},
+    kernel::{Kernel, QueryLut, dot_f16, dot_f16_scalar, pack_blocks, scan, scan_scalar},
     quant::truncate_normalize,
 };
 
@@ -69,5 +70,39 @@ fn every_kernel_handles_the_overflow_edge() {
         let mut out = vec![0u16; 32];
         scan(k, &lut, &blocks, &mut out).unwrap();
         assert!(out.iter().all(|&s| s == 256 * 255), "{k:?}: {out:?}");
+    }
+}
+
+/// The rerank dot product this CPU runs (NEON, AVX2 or scalar) equals the scalar reference bit
+/// for bit, at full and ragged lengths and on an all-zero row; and the reference is a dot
+/// product (against f64).
+#[test]
+fn dot_f16_equals_scalar_bit_for_bit() {
+    let mut rng = StdRng::seed_from_u64(4);
+    for dims in [1, 31, 32, 33, 64, 100, 128, 256, 512, 768, 1000, 1024] {
+        for t in 0..50 {
+            let a: Vec<f16> = (0..dims)
+                .map(|_| match t {
+                    0 => f16::ZERO,
+                    _ => f16::from_f32(rng.random_range(-1.0..1.0)),
+                })
+                .collect();
+            let b: Vec<f32> = (0..dims).map(|_| rng.random_range(-1.0..1.0)).collect();
+            let slow = dot_f16_scalar(&a, &b);
+            assert_eq!(
+                dot_f16(&a, &b).to_bits(),
+                slow.to_bits(),
+                "dims {dims} try {t}"
+            );
+            let exact: f64 = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| f64::from(x.to_f32()) * f64::from(*y))
+                .sum();
+            assert!(
+                (f64::from(slow) - exact).abs() < 1e-4,
+                "dims {dims}: {slow} vs {exact}"
+            );
+        }
     }
 }

@@ -12,7 +12,7 @@ use crate::util::mmap;
 use anyhow::{Context, Result, bail, ensure};
 use fst::Streamer;
 use memmap2::Mmap;
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -290,15 +290,15 @@ impl FilterIndex {
             let Some(field) = self.fields.get(name) else {
                 bail!("{name} is not a filter field of this index (declare it when building)");
             };
-            let mut docs = RoaringBitmap::new();
-            match filter {
-                Filter::Any(values) => {
-                    for v in values {
-                        if let Some(at) = field.values.get(v) {
-                            docs |= field.bitmap(at)?;
-                        }
-                    }
-                }
+            let docs = match filter {
+                // One multi-way union: OR-ing one bitmap at a time re-merges the growing result
+                // every time, which made 100 values take 1.5 ms (#25).
+                Filter::Any(values) => values
+                    .iter()
+                    .filter_map(|v| field.values.get(v))
+                    .map(|at| field.bitmap(at))
+                    .collect::<Result<Vec<_>>>()?
+                    .union(),
                 Filter::Range { gte, lte } => {
                     ensure!(
                         self.date.as_ref() == Some(name),
@@ -317,9 +317,9 @@ impl FilterIndex {
                             self.days.get_or_init(|| tree)
                         }
                     };
-                    docs = tree.range(from, to);
+                    tree.range(from, to)
                 }
-            }
+            };
             allowed = Some(match allowed {
                 None => docs,
                 Some(a) => a & docs,

@@ -1,0 +1,710 @@
+{
+  "bench": "probe widening sweep (#25): nprobe / selectivity^exponent, set by a temporary TELUSUR_PROBE_EXP knob, after the multi-way union",
+  "runs": [
+    {
+      "exponent": 1.0,
+      "dataset": "dbpedia",
+      "report": {
+        "bench": "filters",
+        "index": "indexes/dbpedia",
+        "field": "category",
+        "queries": 1000,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "kernel": "neon",
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "selectivity": 1.0,
+            "docs_allowed": 999000,
+            "path": "clusters",
+            "clusters_probed_mean": 256.0,
+            "recall_at_10": 0.9517,
+            "p50_ms": 0.461458,
+            "p99_ms": 0.596333
+          },
+          {
+            "selectivity": 0.000995995995995996,
+            "docs_allowed": 995,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 1.0,
+            "p50_ms": 0.054625,
+            "p99_ms": 0.057540999999999995
+          },
+          {
+            "selectivity": 0.009943943943943944,
+            "docs_allowed": 9934,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 0.9999,
+            "p50_ms": 0.730042,
+            "p99_ms": 1.1668340000000001
+          },
+          {
+            "selectivity": 0.10020620620620621,
+            "docs_allowed": 100106,
+            "path": "clusters",
+            "clusters_probed_mean": 2048.0,
+            "recall_at_10": 0.9634,
+            "p50_ms": 2.343833,
+            "p99_ms": 2.98825
+          },
+          {
+            "selectivity": 0.4993933933933934,
+            "docs_allowed": 498894,
+            "path": "clusters",
+            "clusters_probed_mean": 513.0,
+            "recall_at_10": 0.9608,
+            "p50_ms": 1.458291,
+            "p99_ms": 1.9037920000000002
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.75,
+      "dataset": "dbpedia",
+      "report": {
+        "bench": "filters",
+        "index": "indexes/dbpedia",
+        "field": "category",
+        "queries": 1000,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "kernel": "neon",
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "selectivity": 1.0,
+            "docs_allowed": 999000,
+            "path": "clusters",
+            "clusters_probed_mean": 256.0,
+            "recall_at_10": 0.9517,
+            "p50_ms": 0.455542,
+            "p99_ms": 0.776875
+          },
+          {
+            "selectivity": 0.000995995995995996,
+            "docs_allowed": 995,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 1.0,
+            "p50_ms": 0.05450000000000001,
+            "p99_ms": 0.056875
+          },
+          {
+            "selectivity": 0.009943943943943944,
+            "docs_allowed": 9934,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 0.9999,
+            "p50_ms": 0.669208,
+            "p99_ms": 0.700084
+          },
+          {
+            "selectivity": 0.10020620620620621,
+            "docs_allowed": 100106,
+            "path": "clusters",
+            "clusters_probed_mean": 1438.0,
+            "recall_at_10": 0.9631,
+            "p50_ms": 1.861875,
+            "p99_ms": 3.021792
+          },
+          {
+            "selectivity": 0.4993933933933934,
+            "docs_allowed": 498894,
+            "path": "clusters",
+            "clusters_probed_mean": 431.0,
+            "recall_at_10": 0.9586,
+            "p50_ms": 1.351,
+            "p99_ms": 1.576167
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.5,
+      "dataset": "dbpedia",
+      "report": {
+        "bench": "filters",
+        "index": "indexes/dbpedia",
+        "field": "category",
+        "queries": 1000,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "kernel": "neon",
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "selectivity": 1.0,
+            "docs_allowed": 999000,
+            "path": "clusters",
+            "clusters_probed_mean": 256.0,
+            "recall_at_10": 0.9517,
+            "p50_ms": 0.46133300000000005,
+            "p99_ms": 0.638083
+          },
+          {
+            "selectivity": 0.000995995995995996,
+            "docs_allowed": 995,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 1.0,
+            "p50_ms": 0.054375,
+            "p99_ms": 0.057958
+          },
+          {
+            "selectivity": 0.009943943943943944,
+            "docs_allowed": 9934,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 0.9999,
+            "p50_ms": 0.680958,
+            "p99_ms": 0.8825000000000001
+          },
+          {
+            "selectivity": 0.10020620620620621,
+            "docs_allowed": 100106,
+            "path": "clusters",
+            "clusters_probed_mean": 809.0,
+            "recall_at_10": 0.9602,
+            "p50_ms": 1.229,
+            "p99_ms": 1.382917
+          },
+          {
+            "selectivity": 0.4993933933933934,
+            "docs_allowed": 498894,
+            "path": "clusters",
+            "clusters_probed_mean": 363.0,
+            "recall_at_10": 0.9566,
+            "p50_ms": 1.293083,
+            "p99_ms": 1.526833
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.35,
+      "dataset": "dbpedia",
+      "report": {
+        "bench": "filters",
+        "index": "indexes/dbpedia",
+        "field": "category",
+        "queries": 1000,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "kernel": "neon",
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "selectivity": 1.0,
+            "docs_allowed": 999000,
+            "path": "clusters",
+            "clusters_probed_mean": 256.0,
+            "recall_at_10": 0.9517,
+            "p50_ms": 0.463667,
+            "p99_ms": 0.7115
+          },
+          {
+            "selectivity": 0.000995995995995996,
+            "docs_allowed": 995,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 1.0,
+            "p50_ms": 0.054542,
+            "p99_ms": 0.058167
+          },
+          {
+            "selectivity": 0.009943943943943944,
+            "docs_allowed": 9934,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 0.9999,
+            "p50_ms": 0.693708,
+            "p99_ms": 1.028917
+          },
+          {
+            "selectivity": 0.10020620620620621,
+            "docs_allowed": 100106,
+            "path": "clusters",
+            "clusters_probed_mean": 573.0,
+            "recall_at_10": 0.9569,
+            "p50_ms": 1.0037500000000001,
+            "p99_ms": 1.217625
+          },
+          {
+            "selectivity": 0.4993933933933934,
+            "docs_allowed": 498894,
+            "path": "clusters",
+            "clusters_probed_mean": 327.0,
+            "recall_at_10": 0.9556,
+            "p50_ms": 1.272708,
+            "p99_ms": 1.459208
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.25,
+      "dataset": "dbpedia",
+      "report": {
+        "bench": "filters",
+        "index": "indexes/dbpedia",
+        "field": "category",
+        "queries": 1000,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "kernel": "neon",
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "selectivity": 1.0,
+            "docs_allowed": 999000,
+            "path": "clusters",
+            "clusters_probed_mean": 256.0,
+            "recall_at_10": 0.9517,
+            "p50_ms": 0.463958,
+            "p99_ms": 0.576542
+          },
+          {
+            "selectivity": 0.000995995995995996,
+            "docs_allowed": 995,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 1.0,
+            "p50_ms": 0.05450000000000001,
+            "p99_ms": 0.056875
+          },
+          {
+            "selectivity": 0.009943943943943944,
+            "docs_allowed": 9934,
+            "path": "exact",
+            "clusters_probed_mean": 0.0,
+            "recall_at_10": 0.9999,
+            "p50_ms": 0.673792,
+            "p99_ms": 0.770584
+          },
+          {
+            "selectivity": 0.10020620620620621,
+            "docs_allowed": 100106,
+            "path": "clusters",
+            "clusters_probed_mean": 456.0,
+            "recall_at_10": 0.9541,
+            "p50_ms": 0.87425,
+            "p99_ms": 0.9437920000000001
+          },
+          {
+            "selectivity": 0.4993933933933934,
+            "docs_allowed": 498894,
+            "path": "clusters",
+            "clusters_probed_mean": 305.0,
+            "recall_at_10": 0.9535,
+            "p50_ms": 1.223958,
+            "p99_ms": 1.396708
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 1.0,
+      "dataset": "fineweb",
+      "report": {
+        "bench": "hybrid-filters",
+        "index": "indexes/fineweb-neural",
+        "docs": 1000000,
+        "queries": 3452,
+        "k": 10,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "filter": "no filter",
+            "selectivity": 1.0,
+            "docs_allowed": 1000000,
+            "neural_recall": 0.9404403244495945,
+            "hybrid_recall": 0.8960023174971031,
+            "neural_p50_ms": 0.625667,
+            "neural_p99_ms": 0.742417,
+            "hybrid_p50_ms": 2.2019159999999998,
+            "hybrid_p99_ms": 8.120416,
+            "leaked": 0
+          },
+          {
+            "filter": "the 1 biggest domains",
+            "selectivity": 0.001118,
+            "docs_allowed": 1118,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9995944380069525,
+            "neural_p50_ms": 0.048875,
+            "neural_p99_ms": 0.053875,
+            "hybrid_p50_ms": 2.144292,
+            "hybrid_p99_ms": 4.7867500000000005,
+            "leaked": 0
+          },
+          {
+            "filter": "the 20 biggest domains",
+            "selectivity": 0.010182,
+            "docs_allowed": 10182,
+            "neural_recall": 0.999217844727694,
+            "hybrid_recall": 0.9996523754345307,
+            "neural_p50_ms": 0.466417,
+            "neural_p99_ms": 0.600583,
+            "hybrid_p50_ms": 2.2876670000000003,
+            "hybrid_p99_ms": 5.017083,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-11-01 to 2020-11-01",
+            "selectivity": 0.001003,
+            "docs_allowed": 1003,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9997682502896872,
+            "neural_p50_ms": 0.04375,
+            "neural_p99_ms": 0.048667,
+            "hybrid_p50_ms": 1.737417,
+            "hybrid_p99_ms": 3.1731670000000003,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-10-31 to 2020-11-01",
+            "selectivity": 0.009978,
+            "docs_allowed": 9978,
+            "neural_recall": 0.9996523754345307,
+            "hybrid_recall": 0.999739281575898,
+            "neural_p50_ms": 0.40425,
+            "neural_p99_ms": 0.449208,
+            "hybrid_p50_ms": 2.1797079999999998,
+            "hybrid_p99_ms": 4.455292,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2018-08-20 to 2019-08-21",
+            "selectivity": 0.099964,
+            "docs_allowed": 99964,
+            "neural_recall": 0.9758400926998841,
+            "hybrid_recall": 0.9201911935110081,
+            "neural_p50_ms": 3.751042,
+            "neural_p99_ms": 4.750709,
+            "hybrid_p50_ms": 3.816541,
+            "hybrid_p99_ms": 4.66875,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2013-05-26 to 2019-08-17",
+            "selectivity": 0.500043,
+            "docs_allowed": 500043,
+            "neural_recall": 0.9570683661645423,
+            "hybrid_recall": 0.9079663962920046,
+            "neural_p50_ms": 1.300208,
+            "neural_p99_ms": 1.5227089999999999,
+            "hybrid_p50_ms": 2.1801670000000004,
+            "hybrid_p99_ms": 6.170208,
+            "leaked": 0
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.5,
+      "dataset": "fineweb",
+      "report": {
+        "bench": "hybrid-filters",
+        "index": "indexes/fineweb-neural",
+        "docs": 1000000,
+        "queries": 3452,
+        "k": 10,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "filter": "no filter",
+            "selectivity": 1.0,
+            "docs_allowed": 1000000,
+            "neural_recall": 0.9404403244495945,
+            "hybrid_recall": 0.8960023174971031,
+            "neural_p50_ms": 0.627458,
+            "neural_p99_ms": 0.7471669999999999,
+            "hybrid_p50_ms": 2.200916,
+            "hybrid_p99_ms": 8.063584,
+            "leaked": 0
+          },
+          {
+            "filter": "the 1 biggest domains",
+            "selectivity": 0.001118,
+            "docs_allowed": 1118,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9995944380069525,
+            "neural_p50_ms": 0.048374999999999994,
+            "neural_p99_ms": 0.050459,
+            "hybrid_p50_ms": 2.147375,
+            "hybrid_p99_ms": 4.86125,
+            "leaked": 0
+          },
+          {
+            "filter": "the 20 biggest domains",
+            "selectivity": 0.010182,
+            "docs_allowed": 10182,
+            "neural_recall": 0.999217844727694,
+            "hybrid_recall": 0.9996523754345307,
+            "neural_p50_ms": 0.468084,
+            "neural_p99_ms": 0.593083,
+            "hybrid_p50_ms": 2.287958,
+            "hybrid_p99_ms": 5.0883329999999996,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-11-01 to 2020-11-01",
+            "selectivity": 0.001003,
+            "docs_allowed": 1003,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9997682502896872,
+            "neural_p50_ms": 0.043875000000000004,
+            "neural_p99_ms": 0.048333,
+            "hybrid_p50_ms": 1.741583,
+            "hybrid_p99_ms": 3.1668339999999997,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-10-31 to 2020-11-01",
+            "selectivity": 0.009978,
+            "docs_allowed": 9978,
+            "neural_recall": 0.9996523754345307,
+            "hybrid_recall": 0.999739281575898,
+            "neural_p50_ms": 0.40495800000000004,
+            "neural_p99_ms": 0.440209,
+            "hybrid_p50_ms": 2.17775,
+            "hybrid_p99_ms": 4.417166999999999,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2018-08-20 to 2019-08-21",
+            "selectivity": 0.099964,
+            "docs_allowed": 99964,
+            "neural_recall": 0.9706546929316339,
+            "hybrid_recall": 0.9149768250289687,
+            "neural_p50_ms": 1.8983750000000001,
+            "neural_p99_ms": 2.140792,
+            "hybrid_p50_ms": 2.0656250000000003,
+            "hybrid_p99_ms": 4.189667,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2013-05-26 to 2019-08-17",
+            "selectivity": 0.500043,
+            "docs_allowed": 500043,
+            "neural_recall": 0.9506083429895713,
+            "hybrid_recall": 0.9017670915411355,
+            "neural_p50_ms": 1.074375,
+            "neural_p99_ms": 1.350041,
+            "hybrid_p50_ms": 2.1738750000000002,
+            "hybrid_p99_ms": 6.154958000000001,
+            "leaked": 0
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.35,
+      "dataset": "fineweb",
+      "report": {
+        "bench": "hybrid-filters",
+        "index": "indexes/fineweb-neural",
+        "docs": 1000000,
+        "queries": 3452,
+        "k": 10,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "filter": "no filter",
+            "selectivity": 1.0,
+            "docs_allowed": 1000000,
+            "neural_recall": 0.9404403244495945,
+            "hybrid_recall": 0.8960023174971031,
+            "neural_p50_ms": 0.6365000000000001,
+            "neural_p99_ms": 0.894375,
+            "hybrid_p50_ms": 2.204375,
+            "hybrid_p99_ms": 8.088708,
+            "leaked": 0
+          },
+          {
+            "filter": "the 1 biggest domains",
+            "selectivity": 0.001118,
+            "docs_allowed": 1118,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9995944380069525,
+            "neural_p50_ms": 0.048708,
+            "neural_p99_ms": 0.053125,
+            "hybrid_p50_ms": 2.150125,
+            "hybrid_p99_ms": 4.777292,
+            "leaked": 0
+          },
+          {
+            "filter": "the 20 biggest domains",
+            "selectivity": 0.010182,
+            "docs_allowed": 10182,
+            "neural_recall": 0.999217844727694,
+            "hybrid_recall": 0.9996523754345307,
+            "neural_p50_ms": 0.46745800000000004,
+            "neural_p99_ms": 0.603041,
+            "hybrid_p50_ms": 2.303667,
+            "hybrid_p99_ms": 5.0985,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-11-01 to 2020-11-01",
+            "selectivity": 0.001003,
+            "docs_allowed": 1003,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9997682502896872,
+            "neural_p50_ms": 0.043958000000000004,
+            "neural_p99_ms": 0.047583,
+            "hybrid_p50_ms": 1.742375,
+            "hybrid_p99_ms": 3.1672919999999998,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-10-31 to 2020-11-01",
+            "selectivity": 0.009978,
+            "docs_allowed": 9978,
+            "neural_recall": 0.9996523754345307,
+            "hybrid_recall": 0.999739281575898,
+            "neural_p50_ms": 0.405708,
+            "neural_p99_ms": 0.440083,
+            "hybrid_p50_ms": 2.180708,
+            "hybrid_p99_ms": 4.410375,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2018-08-20 to 2019-08-21",
+            "selectivity": 0.099964,
+            "docs_allowed": 99964,
+            "neural_recall": 0.9650057937427579,
+            "hybrid_recall": 0.9103707995365006,
+            "neural_p50_ms": 1.5241250000000002,
+            "neural_p99_ms": 1.7659170000000002,
+            "hybrid_p50_ms": 1.918917,
+            "hybrid_p99_ms": 4.2148330000000005,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2013-05-26 to 2019-08-17",
+            "selectivity": 0.500043,
+            "docs_allowed": 500043,
+            "neural_recall": 0.948117033603708,
+            "hybrid_recall": 0.8999710312862109,
+            "neural_p50_ms": 0.991209,
+            "neural_p99_ms": 1.133666,
+            "hybrid_p50_ms": 2.173416,
+            "hybrid_p99_ms": 6.155667,
+            "leaked": 0
+          }
+        ]
+      }
+    },
+    {
+      "exponent": 0.25,
+      "dataset": "fineweb",
+      "report": {
+        "bench": "hybrid-filters",
+        "index": "indexes/fineweb-neural",
+        "docs": 1000000,
+        "queries": 3452,
+        "k": 10,
+        "nprobe": 256,
+        "rerank_depth": 500,
+        "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+        "runs": [
+          {
+            "filter": "no filter",
+            "selectivity": 1.0,
+            "docs_allowed": 1000000,
+            "neural_recall": 0.9404403244495945,
+            "hybrid_recall": 0.8960023174971031,
+            "neural_p50_ms": 0.628625,
+            "neural_p99_ms": 0.76025,
+            "hybrid_p50_ms": 2.201209,
+            "hybrid_p99_ms": 8.088167,
+            "leaked": 0
+          },
+          {
+            "filter": "the 1 biggest domains",
+            "selectivity": 0.001118,
+            "docs_allowed": 1118,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9995944380069525,
+            "neural_p50_ms": 0.048667,
+            "neural_p99_ms": 0.052,
+            "hybrid_p50_ms": 2.138917,
+            "hybrid_p99_ms": 4.766917,
+            "leaked": 0
+          },
+          {
+            "filter": "the 20 biggest domains",
+            "selectivity": 0.010182,
+            "docs_allowed": 10182,
+            "neural_recall": 0.999217844727694,
+            "hybrid_recall": 0.9996523754345307,
+            "neural_p50_ms": 0.470041,
+            "neural_p99_ms": 0.659833,
+            "hybrid_p50_ms": 2.291958,
+            "hybrid_p99_ms": 5.04475,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-11-01 to 2020-11-01",
+            "selectivity": 0.001003,
+            "docs_allowed": 1003,
+            "neural_recall": 0.9996813441483198,
+            "hybrid_recall": 0.9997682502896872,
+            "neural_p50_ms": 0.04375,
+            "neural_p99_ms": 0.046583,
+            "hybrid_p50_ms": 1.742375,
+            "hybrid_p99_ms": 3.1875419999999997,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2020-10-31 to 2020-11-01",
+            "selectivity": 0.009978,
+            "docs_allowed": 9978,
+            "neural_recall": 0.9996523754345307,
+            "hybrid_recall": 0.999739281575898,
+            "neural_p50_ms": 0.405458,
+            "neural_p99_ms": 0.43720800000000004,
+            "hybrid_p50_ms": 2.180083,
+            "hybrid_p99_ms": 4.4299159999999995,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2018-08-20 to 2019-08-21",
+            "selectivity": 0.099964,
+            "docs_allowed": 99964,
+            "neural_recall": 0.9597045191193511,
+            "hybrid_recall": 0.9052143684820394,
+            "neural_p50_ms": 1.337583,
+            "neural_p99_ms": 1.630542,
+            "hybrid_p50_ms": 1.900583,
+            "hybrid_p99_ms": 4.122041,
+            "leaked": 0
+          },
+          {
+            "filter": "crawl_date 2013-05-26 to 2019-08-17",
+            "selectivity": 0.500043,
+            "docs_allowed": 500043,
+            "neural_recall": 0.9466396292004635,
+            "hybrid_recall": 0.898928157589803,
+            "neural_p50_ms": 0.960125,
+            "neural_p99_ms": 1.0878750000000001,
+            "hybrid_p50_ms": 2.1793329999999997,
+            "hybrid_p99_ms": 6.279,
+            "leaked": 0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "bench": "ablate-quant",
+  "docs": 200000,
+  "queries": 3452,
+  "k": 100,
+  "reference": "exact top 100 by cosine at 768 dims, over the same 200000 docs",
+  "kernel": "neon",
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+  "rows": [
+    {
+      "dims": 64,
+      "hamming": 0.058221320973348784,
+      "float_table": 0.09926998841251448,
+      "u8_table": 0.09938876013904982
+    },
+    {
+      "dims": 128,
+      "hamming": 0.0986268829663963,
+      "float_table": 0.1713180764774044,
+      "u8_table": 0.17125434530706837
+    },
+    {
+      "dims": 256,
+      "hamming": 0.17380648899188875,
+      "float_table": 0.2813760139049826,
+      "u8_table": 0.2814484356894554
+    },
+    {
+      "dims": 512,
+      "hamming": 0.305130359212051,
+      "float_table": 0.43847914252607184,
+      "u8_table": 0.43847914252607184
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "bench": "hybrid-filters",
+  "index": "indexes/fineweb-neural",
+  "docs": 1000000,
+  "queries": 3452,
+  "k": 10,
+  "nprobe": 256,
+  "rerank_depth": 500,
+  "machine": "Apple M4, 10 cores, 16 GB RAM, macos aarch64, AC power",
+  "runs": [
+    {
+      "filter": "no filter",
+      "selectivity": 1.0,
+      "docs_allowed": 1000000,
+      "neural_recall": 0.9404403244495945,
+      "hybrid_recall": 0.8960023174971031,
+      "neural_p50_ms": 0.714834,
+      "neural_p99_ms": 0.81775,
+      "hybrid_p50_ms": 2.152459,
+      "hybrid_p99_ms": 7.673834,
+      "leaked": 0
+    },
+    {
+      "filter": "the 1 biggest domains",
+      "selectivity": 0.001118,
+      "docs_allowed": 1118,
+      "neural_recall": 0.9996813441483198,
+      "hybrid_recall": 0.9995944380069525,
+      "neural_p50_ms": 0.11620799999999999,
+      "neural_p99_ms": 0.123833,
+      "hybrid_p50_ms": 2.069791,
+      "hybrid_p99_ms": 4.634333,
+      "leaked": 0
+    },
+    {
+      "filter": "the 20 biggest domains",
+      "selectivity": 0.010182,
+      "docs_allowed": 10182,
+      "neural_recall": 0.999217844727694,
+      "hybrid_recall": 0.9996523754345307,
+      "neural_p50_ms": 1.2940829999999999,
+      "neural_p99_ms": 1.808708,
+      "hybrid_p50_ms": 2.425417,
+      "hybrid_p99_ms": 5.086334,
+      "leaked": 0
+    },
+    {
+      "filter": "crawl_date 2020-11-01 to 2020-11-01",
+      "selectivity": 0.001003,
+      "docs_allowed": 1003,
+      "neural_recall": 0.9996813441483198,
+      "hybrid_recall": 0.9997682502896872,
+      "neural_p50_ms": 0.096958,
+      "neural_p99_ms": 0.10433300000000001,
+      "hybrid_p50_ms": 1.678166,
+      "hybrid_p99_ms": 3.064458,
+      "leaked": 0
+    },
+    {
+      "filter": "crawl_date 2020-10-31 to 2020-11-01",
+      "selectivity": 0.009978,
+      "docs_allowed": 9978,
+      "neural_recall": 0.9996523754345307,
+      "hybrid_recall": 0.999739281575898,
+      "neural_p50_ms": 0.980959,
+      "neural_p99_ms": 1.2173749999999999,
+      "hybrid_p50_ms": 2.192959,
+      "hybrid_p99_ms": 4.902709,
+      "leaked": 0
+    },
+    {
+      "filter": "crawl_date 2018-08-20 to 2019-08-21",
+      "selectivity": 0.099964,
+      "docs_allowed": 99964,
+      "neural_recall": 0.9758400926998841,
+      "hybrid_recall": 0.9201911935110081,
+      "neural_p50_ms": 3.8265830000000003,
+      "neural_p99_ms": 5.0101249999999995,
+      "hybrid_p50_ms": 3.846833,
+      "hybrid_p99_ms": 4.783208,
+      "leaked": 0
+    },
+    {
+      "filter": "crawl_date 2013-05-26 to 2019-08-17",
+      "selectivity": 0.500043,
+      "docs_allowed": 500043,
+      "neural_recall": 0.9570683661645423,
+      "hybrid_recall": 0.9079663962920046,
+      "neural_p50_ms": 1.372417,
+      "neural_p99_ms": 1.536459,
+      "hybrid_p50_ms": 2.149167,
+      "hybrid_p99_ms": 5.9782910000000005,
+      "leaked": 0
+    }
+  ]
+}

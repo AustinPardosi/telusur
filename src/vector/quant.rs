@@ -1,7 +1,5 @@
 //! Matryoshka truncation, 1-bit codes, and dot products.
 
-use half::{f16, slice::HalfFloatSliceExt};
-
 /// The first `dims` values of `v`, scaled to unit length. A zero vector stays zero.
 pub fn truncate_normalize(v: &[f32], dims: usize) -> Vec<f32> {
     let mut out = v[..dims].to_vec();
@@ -35,17 +33,4 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
         }
     }
     lanes.iter().sum::<f32>() + a_rest.iter().zip(b_rest).map(|(x, y)| x * y).sum::<f32>()
-}
-
-/// Converts 64 halves at a time with `half`'s SIMD slice conversion, then `dot`.
-pub fn dot_f16(a: &[f16], b: &[f32]) -> f32 {
-    let mut buf = [0f32; 64];
-    a.chunks(64)
-        .zip(b.chunks(64))
-        .map(|(x, y)| {
-            let buf = &mut buf[..x.len()];
-            x.convert_to_f32_slice(buf);
-            dot(buf, y)
-        })
-        .sum()
 }

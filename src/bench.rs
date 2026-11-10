@@ -493,7 +493,7 @@ pub struct FilterRun {
     /// Share of docs the filter allows; 1.0 is no filter.
     pub selectivity: f64,
     pub docs_allowed: u64,
-    /// "exact" scores every allowed doc; "clusters" probes nprobe / selectivity clusters.
+    /// "exact" scores every allowed doc; "clusters" probes nprobe / sqrt(selectivity) clusters.
     pub path: &'static str,
     pub clusters_probed_mean: f64,
     /// Against the exact top 10 among the allowed docs, by cosine at the rerank dims.

@@ -1,5 +1,7 @@
 # B5: filtered neural and hybrid search on FineWeb 1M (10 Nov 2026)
 
+Superseded the same day: this index used 256-dim codes. The FineWeb index now uses 512-dim codes ([why](fineweb-recall-2026-11-10.md)) and a faster rerank ([#24](https://github.com/AustinPardosi/telusur/issues/24)); the README's numbers come from those runs.
+
 Raw outputs:
 
 - Embed and build log: [`fineweb-neural-build-2026-11-10.txt`](fineweb-neural-build-2026-11-10.txt)
