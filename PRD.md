@@ -6,7 +6,7 @@
 
 ## 1. One line
 
-**telusur** is a hybrid search engine in Rust that rebuilds the architecture Exa describes in its engineering blog: a binary-quantized Matryoshka vector index with register-resident lookup-table scoring, a compressed in-memory BM25 index, and rank fusion on top, all measured honestly on real datasets.
+**telusur** is a hybrid search engine in Rust built on published designs (section 3): a binary-quantized Matryoshka vector index with register-resident lookup-table scoring, a compressed in-memory BM25 index, and rank fusion on top, all measured honestly on real datasets.
 
 **Name:** *telusur* is Indonesian for "to search through, to trace" (teh-LOO-soor). It is short, means exactly what the project does, and has a personal story behind it. It is free on [crates.io](http://crates.io) as of 5 Nov 2026, so the crate, repo and CLI can all be `telusur`. My first pick, `cari` ("search"), is already taken on [crates.io](http://crates.io) by an unrelated package. Backups that were also free: `lacak` ("to track"), `jelajah` ("to explore").
 
@@ -26,13 +26,13 @@ I want to understand how a search engine built for AI works under the hood, end 
 | Web-scale keyword search                           | Compressed BM25 with pruning, millions of docs                                   |
 
 
-The detail that started it: Exa's vector DB post says the lookup-table kernel had to be written in C++ instead of Rust for performance. telusur does it in Rust with `std::arch` (AVX2, AVX-512, NEON) and shows the numbers.
+The detail that started it: the vector DB write-up [1] says its lookup-table kernel had to be written in C++ instead of Rust for performance. telusur does it in Rust with `std::arch` (AVX2, AVX-512, NEON) and shows the numbers.
 
-## 3. The blueprint: what Exa has published
+## 3. The blueprint: published designs
 
-Everything below comes from Exa's own posts. telusur follows these designs on purpose, so every result can be checked against what the posts report.
+Everything below comes from public engineering write-ups, listed in [section 14](#14-references). telusur follows these designs on purpose, so every result can be checked against what they report.
 
-**Vector DB** ([How we built a web-scale vector database](https://exa.ai/blog/building-web-scale-vector-db), Dec 2024)
+**Vector DB** ([1], Dec 2024)
 
 - Requirements: billions of vectors (4096 dims), metadata filters, under 100 ms, over 500 QPS.
 - Matryoshka embeddings truncated to the first 256 dims.
@@ -44,19 +44,19 @@ Everything below comes from Exa's own posts. telusur follows these designs on pu
 - Rerank the top candidates with uncompressed vectors.
 - Filters through inverted indexes (value to doc id list); search only runs over matching docs. They note clustering composes with filters better than HNSW, and shards more easily.
 
-**BM25** ([Serving BM25 with 50% memory reduction](https://exa.ai/blog/bm25-optimization), May 2025)
+**BM25** ([2], May 2025)
 
 - Rust, in-memory inverted index, billions of docs sharded across workers. Started at over 1.8 TB per billion docs.
 - Tricks: group postings by term frequency (tf stored once per group; telusur calls these tiers), delta + varint doc ids (about 1.3 bytes per id instead of 4), zstd on top, one flat buffer with `(offset, len)` per term instead of one `Vec` per term, singletons stored inline, +1-shifted ids so 0x00 can be a separator.
 - Query: start from the rarest terms, WAND-inspired pruning. Result: over 50% less memory, about 10% lower latency.
 
-**Pipeline** ([Composing a search engine](https://exa.ai/blog/composing-a-search-engine))
+**Pipeline** ([3])
 
 - Search is a DAG of nodes: query encoding, sharded ANN workers, scorers, rerankers, content fetch.
 - Example fusion node: reciprocal rank fusion (RRF) with `k = 60` over neural and keyword sources.
 - Automatic tracing at every node boundary (timings, inputs, decisions).
 
-**Data** ([exa-d, storing the web in S3](https://exa.ai/engineering))
+**Data** ([4])
 
 - Lance columnar format on S3, typed columns, a dependency graph between columns, Ray Data for execution, recompute only missing columns.
 
@@ -65,7 +65,7 @@ Everything below comes from Exa's own posts. telusur follows these designs on pu
 ### Goals
 
 1. A working engine: index a corpus, search it over HTTP in keyword, neural or hybrid mode, with filters.
-2. Faithful to Exa's published design, with each deviation explained.
+2. Faithful to the published designs in section 3, with each deviation explained.
 3. Every claim backed by a reproducible benchmark and the exact command that produced it.
 4. Correctness first: every fast path is tested against a slow exact path.
 5. Runs on one laptop (Apple Silicon or x86), tested in CI on both architectures.
@@ -95,7 +95,7 @@ Measure first, then write the README. These are the bars to aim for.
 | BM25 quality     | nDCG@10 on SciFact, NFCorpus, FiQA, TREC-COVID     | Within 1.0 point of Anserini BM25 (k1=0.9, b=0.4)           |
 | BM25 pruning     | MaxScore top-k vs exhaustive                       | Same top-k scores on every query, within 1e-5 relative      |
 | BM25 pruning     | Postings decoded                                   | ≥ 50% fewer than exhaustive on 3+ term queries              |
-| BM25 memory      | Index size vs naive `HashMap<u32, Vec<(u32,u32)>>` | ≥ 50% smaller (Exa's number)                                |
+| BM25 memory      | Index size vs naive `HashMap<u32, Vec<(u32,u32)>>` | ≥ 50% smaller (the number in [2])                           |
 | Hybrid           | RRF nDCG@10                                        | ≥ the better of keyword and neural on 3 of 4 BEIR sets      |
 | Ingest           | End-to-end docs/sec on FineWeb                     | Report, plus docs/day = docs/sec × 86,400                   |
 
@@ -121,7 +121,7 @@ flowchart LR
 
 ```
 
-One process. Keyword and neural retrieval run in parallel (`rayon::join`), then fuse. Every stage records its time, like Exa's tracing.
+One process. Keyword and neural retrieval run in parallel (`rayon::join`), then fuse. Every stage records its time, like the tracing in [3].
 
 An index is read-only once built: no add, update or delete, and changing the corpus means a rebuild ([ADR 0001](docs/adr/0001-indexes-are-immutable.md)). Words like cluster, code, tier and rerank depth are defined in [`GLOSSARY.md`](GLOSSARY.md).
 
@@ -157,7 +157,7 @@ An index is read-only once built: no add, update or delete, and changing the cor
 1. Route: dot product of the query prefix with every centroid, keep the best `nprobe` clusters, scan best first so the threshold rises early.
 2. Scan: kernel scores each cluster into a u16 buffer; keep the top rerank depth candidates (default 500, from B3: at 200 recall stops near 0.92 on DBpedia) with a threshold check before touching the heap.
 3. Rerank: exact dot product with rerank vectors; return top k. The query can arrive as a full vector; it is truncated and normalized first.
-4. Filters: a roaring bitmap of allowed ids. If it allows ≤ 20,000 docs, skip the index and score those docs exactly with rerank vectors (this is Exa's "only search the docs that match"). Otherwise scan with `nprobe / selectivity` clusters (capped) and drop disallowed ids before the heap.
+4. Filters: a roaring bitmap of allowed ids. If it allows ≤ 20,000 docs, skip the index and score those docs exactly with rerank vectors (the "only search the docs that match" idea from [1]). Otherwise scan with `nprobe / sqrt(selectivity)` clusters (capped) and drop disallowed ids before the heap. (The first design said `nprobe / selectivity`, which probes every cluster at 10%. The square root kept filtered recall above unfiltered on both datasets at a third of the cost; see `bench-results/broad-filters-2026-11-10.md`.)
 
 **Memory per vector (1M, 256-dim codes, 1024-dim rerank)**
 
@@ -170,7 +170,7 @@ An index is read-only once built: no add, update or delete, and changing the cor
 | Raw float32 3072-dim (for comparison) | 12,288           | 12.3 GB    |
 
 
-The scan touches only the hot part. At a billion vectors the hot part is about 36 GB, which is the "less memory than a gaming PC" point from Exa's post (they also shard by cluster).
+The scan touches only the hot part. At a billion vectors the hot part is about 36 GB, which is the "less memory than a gaming PC" point from [1] (which also shards by cluster).
 
 ### 6.2 BM25 index
 
@@ -186,14 +186,14 @@ The scan touches only the hot part. At a billion vectors the hot part is about 3
 
 - Lucene BM25: `idf = ln(1 + (N - df + 0.5) / (df + 0.5))`, `score = idf · tf / (tf + k1 · (1 - b + b · dl / avgdl))`. Defaults k1 = 0.9, b = 0.4 (Anserini's BEIR settings).
 
-**Postings format** (Exa's tricks, one change)
+**Postings format** (the tricks from [2], one change)
 
 - Group by tf: tiers for tf = 1..15, plus an overflow tier (tf ≥ 16) that stores tf per doc.
-- Delta + varint doc ids inside each tier. First value is `doc + 1`, so every varint is ≥ 1 and never contains a 0x00 byte (Exa's property).
+- Delta + varint doc ids inside each tier. First value is `doc + 1`, so every varint is ≥ 1 and never contains a 0x00 byte (the property [2] relies on).
 - One flat `postings.bin`; each term has `(offset, len, df)`.
 - Singletons (df = 1): doc id and tf live in the term entry, zero posting bytes.
 - Term dictionary: an FST (`fst` crate), memory-mapped.
-- **Change from Exa:** instead of 0x00 separators, each tier has a tiny header (`n_docs`, `byte_len`, `min_norm`, optional `max_tf`, optional skip index). Pruning needs to jump straight to any tier, which separators do not allow.
+- **Change from [2]:** instead of 0x00 separators, each tier has a tiny header (`n_docs`, `byte_len`, `min_norm`, optional `max_tf`, optional skip index). Pruning needs to jump straight to any tier, which separators do not allow.
 - Skip intervals of 128 postings inside long tiers. Each skip entry is `(prev_doc, byte_offset)`, so decoding can resume mid-tier.
 
 Term layout:
@@ -209,21 +209,21 @@ per tier: varint n_docs, varint byte_len, u8 min_norm,
 
 ```
 
-**Query: the key idea** A tier holds docs with the same tf, so its best possible contribution is exact: `idf · tf / (tf + K(shortest doc in tier))`. So grouping by frequency, which Exa did to save memory, also turns every posting list into impact-ordered sub-lists for free.
+**Query: the key idea** A tier holds docs with the same tf, so its best possible contribution is exact: `idf · tf / (tf + K(shortest doc in tier))`. So grouping by frequency, which [2] does to save memory, also turns every posting list into impact-ordered sub-lists for free.
 
 - Both strategies are selectable per request (a debug-only option), and must return the same top-k scores within 1e-5 relative. They sum per-term scores in different orders, so exact f32 equality is not promised.
 - *Exhaustive (baseline):* decode every posting of every query term into a dense f32 accumulator, take top k.
 - *MaxScore over tiers (main path):* treat each (term, tier) as its own cursor with its own upper bound. Sort cursors by bound. Cursors whose summed bounds cannot beat the current k-th score become "non-essential": only probed with skip intervals for docs that could still make it. The long tf=1 tiers of common words are exactly the ones that go non-essential.
 - Per query, precompute a 256-entry table per tier (one entry per norm byte), so scoring a posting is one lookup.
 
-**Memory ablation to report** (like Exa's post, step by step)
+**Memory ablation to report** (step by step, like [2])
 
 1. Naive: `HashMap<u32, Vec<(u32, u32)>>` (8 B per posting + about 33 B per term) + 4 B per doc length.
 2. Flat buffer + `(offset, len)` per term.
 3. Add delta varint doc ids.
 4. Add tf tiers.
 5. Add inline singletons, FST dictionary, 1-byte norms.
-6. Optional: add zstd on cold terms (Exa does this; measure the latency cost).
+6. Optional: add zstd on cold terms ([2] does this; measure the latency cost).
 
 ### 6.3 Hybrid and pipeline
 
@@ -232,7 +232,7 @@ per tier: varint n_docs, varint byte_len, u8 min_norm,
 - When neural search is not possible (the index has no vectors, no embedder is configured, the embedder errors, or it does not answer within 1 s), `hybrid` falls back to keyword and says so with `mode_used` and `fallback_reason`. An explicit `neural` request fails instead (HTTP 503 for embedder problems).
 - Both retrievers take the same filter bitmap.
 - Response carries per-stage timings: `embed`, `route`, `scan`, `rerank`, `keyword`, `fuse`, `docs`, `total`.
-- Stretch: express the pipeline as a small DAG config (like Exa's Canon) so a request can choose stages.
+- Stretch: express the pipeline as a small DAG config (like [3]) so a request can choose stages.
 
 ### 6.4 Ingest pipeline
 
@@ -285,7 +285,7 @@ Response
 
 Also `GET /health` and `GET /stats` (index sizes, kernel in use, doc count).
 
-Query embedding: the server calls an embedder sidecar (`scripts/embed_server.py`, same model used to embed the corpus) at a configurable URL with a 1 s timeout, or accepts `vector` directly. This mirrors Exa's separate query-encoder workers.
+Query embedding: the server calls an embedder sidecar (`scripts/embed_server.py`, same model used to embed the corpus) at a configurable URL with a 1 s timeout, or accepts `vector` directly. This mirrors the separate query-encoder workers in [3].
 
 ### 6.6 CLI
 
@@ -310,7 +310,7 @@ All data lives in `data/` (gitignored). Scripts in `scripts/` download and conve
 
 - **Source:** [`Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M`](https://huggingface.co/datasets/Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M) on Hugging Face.
 - **Size:** 24.8 GB, about 1M rows, 3072-dim vectors plus title and text.
-- **Why:** real, large, and the model supports Matryoshka truncation, which is exactly Exa's setup. It also has text, so BM25 and hybrid can run on the same corpus.
+- **Why:** real, large, and the model supports Matryoshka truncation, which is exactly the setup in [1]. It also has text, so BM25 and hybrid can run on the same corpus.
 - **Prep (**`scripts/prep_dbpedia.py`**):** auto-detect the embedding column (the dataset card does not list columns clearly), hold out the last 1,000 rows as queries, write `base.fbin` (999,000 × 3072), `queries.fbin`, `corpus.jsonl`. Then `telusur gt` for the exact top 100 at full 3072 dims (full ground truth) and at the rerank dims (rerank ground truth).
 - **Note:** BEIR's DBPedia-entity qrels are for the full 4.6M corpus, so do not use them for quality on this 1M subset. D1 is for speed, memory and recall only.
 - **Disk:** about 12 GB for `base.fbin` at full dims. After prep and both ground truths, delete the 24.8 GB parquet download and keep the full-dim `base.fbin`, so full-dim rerank stays possible.
@@ -410,7 +410,7 @@ How B4 and B9 run (the FAISS, hnswlib and Tantivy harnesses) is decided in M6. T
 **Expected headline findings** (verify, do not assume)
 
 1. The register LUT kernel in Rust: hundreds of millions of codes per second per core, tens of times faster than scalar.
-2. Asymmetric scoring beats Hamming on first-stage recall at the same memory (Exa's claim, tested on open data).
+2. Asymmetric scoring beats Hamming on first-stage recall at the same memory (the claim in [1], tested on open data).
 3. Frequency tiers are impact tiers: MaxScore over tiers decodes far fewer postings with the same top-k scores.
 4. BM25 matches Anserini within a point on BEIR while using less than half the naive memory.
 
@@ -481,7 +481,7 @@ telusur/
 - Why asymmetric scoring beats Hamming, with B2 numbers.
 - The u16 overflow bound and why it caps code dims at 1024.
 - Why `pshufb` needs the table duplicated per 128-bit lane.
-- Why IVF composes with filters better than HNSW (Exa's point), with B5.
+- Why IVF composes with filters better than HNSW (a point from [1]), with B5.
 - Tiers as impact tiers, and why the separator byte had to go.
 - What breaks first going from 1M to 1B: hot memory (36 GB), k-means cost, shard by cluster.
 
@@ -492,4 +492,13 @@ telusur/
 - Product quantization or 2-bit codes as an alternative first stage.
 - zstd cold tier for BM25.
 - GPU k-means.
-- A Lance / columnar storage layer like exa-d.
+- A Lance / columnar storage layer, as in [4].
+
+## 14. References
+
+The engineering write-ups section 3 summarizes, all from Exa's engineering blog:
+
+1. [How we built a web-scale vector database](https://exa.ai/blog/building-web-scale-vector-db), Dec 2024.
+2. [Serving BM25 with 50% memory reduction](https://exa.ai/blog/bm25-optimization), May 2025.
+3. [Composing a search engine](https://exa.ai/blog/composing-a-search-engine).
+4. [exa-d: storing the web in S3](https://exa.ai/engineering).

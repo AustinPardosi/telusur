@@ -188,8 +188,8 @@ pub struct AblationStep {
     pub bytes_per_posting: f64,
 }
 
-/// B8: bytes per posting at each step of the posting format, like the memory story in Exa's
-/// BM25 post. Builds the index in `out`; the last step is the size of its files.
+/// B8: bytes per posting at each step of the posting format, the PRD's memory ablation.
+/// Builds the index in `out`; the last step is the size of its files.
 pub fn ablate_postings(corpus: &Path, out: &Path) -> Result<AblationReport> {
     let mut seen = None;
     let docs = engine::build_with(corpus, out, &BuildOptions::default(), |b| {

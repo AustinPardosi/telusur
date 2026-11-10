@@ -4,7 +4,7 @@ Guide for Claude Code working in this repo. Read [`PRD.md`](PRD.md) before start
 
 ## What this is
 
-`telusur` is a hybrid search engine in Rust: a binary-quantized Matryoshka IVF vector index with SIMD lookup-table scoring, a compressed BM25 index with MaxScore over tf tiers, and RRF fusion. It rebuilds designs from Exa's engineering blog. It is a personal project. Correctness and honest measurement matter more than features.
+`telusur` is a hybrid search engine in Rust: a binary-quantized Matryoshka IVF vector index with SIMD lookup-table scoring, a compressed BM25 index with MaxScore over tf tiers, and RRF fusion. It rebuilds designs from published engineering write-ups (PRD section 3). It is a personal project. Correctness and honest measurement matter more than features.
 
 ## Ground rules
 

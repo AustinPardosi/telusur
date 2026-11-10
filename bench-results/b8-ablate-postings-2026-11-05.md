@@ -17,7 +17,7 @@ Corpus: 2,681,468 docs, 996,981 distinct terms, 118,649,493 postings, after the 
 | + tf tiers (with headers and skips)                      | 182,256,965   | 94,450,087  | 10,725,872  | 287,432,924   | 2.42              |
 | + inline singletons, FST dictionary, 1-byte norms        | 177,270,386   | 15,118,001  | 2,681,468   | 195,069,855   | 1.64              |
 
-**The final format is 87% smaller than naive** (195 MB vs 1,506 MB, a ratio of 0.130), so it clears the 50% bar from Exa's post.
+**The final format is 87% smaller than naive** (195 MB vs 1,506 MB, a ratio of 0.130), so it clears the PRD's 50% target.
 
 How each row is measured, all from the same in-memory postings of one build:
 

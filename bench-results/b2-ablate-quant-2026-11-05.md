@@ -19,4 +19,4 @@ The first 200,000 DBpedia base vectors (OpenAI text-embedding-3-large) and the 1
 | 256  | 0.304   | 0.425       | 0.425    |
 | 512  | 0.497   | 0.622       | 0.622    |
 
-**What the numbers say:** keeping the query in float finds 1.25x (512 dims) to 1.7x (64 dims) as many of the true top 100 as Hamming at the same memory, as Exa's post says. Quantizing the tables to u8 costs nothing measurable: float and u8 differ by at most 0.00006. Longer codes keep helping: 256 dims find 42.5% of the top 100, 512 dims 62.2%.
+**What the numbers say:** keeping the query in float finds 1.25x (512 dims) to 1.7x (64 dims) as many of the true top 100 as Hamming at the same memory. Quantizing the tables to u8 costs nothing measurable: float and u8 differ by at most 0.00006. Longer codes keep helping: 256 dims find 42.5% of the top 100, 512 dims 62.2%.
